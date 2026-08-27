@@ -34,6 +34,7 @@
 | 413 | `PHOTO_TOO_LARGE` | 超过 1MB → 固件检查相机 JPEG 参数 |
 | 415 | `BAD_CONTENT_TYPE` | 非 JPEG |
 | 429 | `RATE_LIMITED` | 响应含 `retry_after`（秒）→ 严格按此退避 |
+| 503 | `STORAGE_UNAVAILABLE` | 图片存储暂不可用；照片未发布，稍后按同一幂等键重试 |
 | 500 | `SERVER_ERROR` | 指数退避重试（1s → 4s → 15s，至多 3 次） |
 
 ---

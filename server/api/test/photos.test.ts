@@ -80,6 +80,26 @@ test('routes photo persistence through an injectable storage adapter', async () 
   await app.close()
 })
 
+test('does not publish metadata when photo storage fails', async () => {
+  const storage = {
+    async save() { throw new Error('disk unavailable') },
+    async remove() {},
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-storage-failure', photoStorage: storage })
+  const before = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  const failed = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'storage-failure-1' },
+    payload: jpeg,
+  })
+  assert.equal(failed.statusCode, 503)
+  assert.equal(failed.json().error.code, 'STORAGE_UNAVAILABLE')
+  const after = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(after.json().items.length, before.json().items.length)
+  await app.close()
+})
+
 test('enforces the per-device daily upload limit', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-limit', uploadDailyLimit: 1 })
   const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }

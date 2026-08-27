@@ -31,7 +31,9 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const beauty = Number(r.headers['x-beauty'] ?? 0)
     if (!Number.isFinite(beauty) || beauty < 0 || beauty > 100) return reply.code(400).send(errorBody('BAD_REQUEST', 'beauty must be between 0 and 100'))
     const id = `p_${randomUUID()}`; const p = { id, authorId: u.id, filterId: String(r.headers['x-filter-id'] ?? 'none'), playType: String(r.headers['x-play-type'] ?? 'ccd'), beauty, sticker: String(r.headers['x-sticker'] ?? 'none'), caption, circle: String(r.headers['x-circle'] ?? '小圈'), width, height, createdAt: new Date().toISOString(), original: body, processed: body, idempotencyKey: idem, deviceId }
-    store.photos.set(id, p); await files.save(p); return reply.code(201).send(uploadResult(p, store))
+    try { await files.save(p) } catch { return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable')) }
+    store.photos.set(id, p)
+    return reply.code(201).send(uploadResult(p, store))
   })
   app.get('/photos/:id/image', async (r, reply) => {
     const u = user(r, store)
