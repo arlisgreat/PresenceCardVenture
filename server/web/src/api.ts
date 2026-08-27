@@ -47,20 +47,56 @@ class ApiError extends Error {
 
 const API = '/v1'
 
-async function jpegPayload(file: File): Promise<Blob | File> {
-  if (file.type === 'image/jpeg') return file
-  if (file.type !== 'image/png') throw new Error('仅支持 JPG 或 PNG 图片')
-  if (typeof createImageBitmap !== 'function') return file
+type ProcessedImage = { blob: Blob | File; width: number; height: number }
+
+function clamp(value: number) {
+  return Math.max(0, Math.min(255, Math.round(value)))
+}
+
+async function jpegPayload(file: File, options: { filterId: string; beauty: number; sticker: string }): Promise<ProcessedImage> {
+  if (!['image/jpeg', 'image/png'].includes(file.type)) throw new Error('仅支持 JPG 或 PNG 图片')
+  if (typeof createImageBitmap !== 'function') return { blob: file, width: 0, height: 0 }
   const bitmap = await createImageBitmap(file)
   const canvas = document.createElement('canvas')
   const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height))
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
-  canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) { bitmap.close(); return { blob: file, width, height } }
+  context.drawImage(bitmap, 0, 0, width, height)
   bitmap.close()
+  const pixels = context.getImageData(0, 0, width, height)
+  const intensity = Math.max(0, Math.min(1, options.beauty / 100))
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    let red = pixels.data[index]
+    let green = pixels.data[index + 1]
+    let blue = pixels.data[index + 2]
+    if (options.filterId === 'warm') { red += 14; green += 7; blue -= 3 }
+    if (options.filterId === 'film') { red = red * .92 + 10; green = green * .98 + 4; blue = blue * .86 + 8 }
+    if (options.filterId === 'vivid') { red = (red - 128) * 1.12 + 128; green = (green - 128) * 1.12 + 128; blue = (blue - 128) * 1.12 + 128 }
+    if (options.filterId === 'bw') { const gray = red * .299 + green * .587 + blue * .114; red = gray; green = gray; blue = gray }
+    if (intensity > 0) { red += 18 * intensity; green += 18 * intensity; blue += 18 * intensity }
+    pixels.data[index] = clamp(red)
+    pixels.data[index + 1] = clamp(green)
+    pixels.data[index + 2] = clamp(blue)
+  }
+  context.putImageData(pixels, 0, 0)
+  if (options.sticker === 'star') {
+    context.fillStyle = 'rgba(255, 247, 210, .92)'
+    context.font = `bold ${Math.max(18, Math.round(width / 16))}px sans-serif`
+    context.fillText('✦', Math.max(10, width - 42), Math.max(28, height - 18))
+  } else if (options.sticker === 'date') {
+    context.fillStyle = 'rgba(255, 255, 255, .86)'
+    context.font = `600 ${Math.max(10, Math.round(width / 70))}px monospace`
+    const now = new Date()
+    const localDate = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('·')
+    context.fillText(localDate, Math.max(10, width - 110), Math.max(20, height - 18))
+  }
   const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', .88))
   if (!blob) throw new Error('图片转换失败')
-  return blob
+  return { blob, width, height }
 }
 
 const demoFeed: FeedItem[] = [
@@ -90,8 +126,9 @@ export async function getFeed(): Promise<FeedItem[]> {
 export async function uploadPhoto(file: File, options: { filterId: string; caption: string; play: PlayType; beauty: number; sticker: string }): Promise<FeedItem> {
   const localUrl = URL.createObjectURL(file)
   try {
-    const payload = await jpegPayload(file)
-    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': '1080', 'X-Height': '1350' } })
+    const processed = await jpegPayload(file, options)
+    const payload = processed.blob
+    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
     if (!response.ok) throw new ApiError(response.status, (await response.text()) || `Request failed: ${response.status}`)
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
     const imageUrl = result.url ?? localUrl
