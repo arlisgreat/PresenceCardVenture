@@ -3,16 +3,22 @@ import { randomUUID } from 'node:crypto'
 import { DemoStore, errorBody } from '../demo-store.js'
 import type { PhotoStorage } from '../photo-store.js'
 
-const user = (r: FastifyRequest, store: DemoStore) => store.userForToken(String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, ''))
+const auth = (r: FastifyRequest, store: DemoStore) => {
+  const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+  const device = store.deviceForToken(token)
+  const account = store.userForToken(token) ?? (device?.userId ? store.user(device.userId) : undefined)
+  return { account, device }
+}
 export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStorage }) {
   const { store, files } = opts
   app.post('/photos', async (r, reply) => {
-    const u = user(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
+    const { account: u, device } = auth(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
     const body = r.body as Buffer; if (!Buffer.isBuffer(body)) return reply.code(415).send(errorBody('BAD_CONTENT_TYPE','JPEG required'))
     if (body.length > 1024 * 1024) return reply.code(413).send(errorBody('PHOTO_TOO_LARGE','image exceeds 1048576 bytes'))
     if (body.length < 2 || body[0] !== 0xff || body[1] !== 0xd8) return reply.code(415).send(errorBody('BAD_CONTENT_TYPE','JPEG required'))
     const idem = String(r.headers['idempotency-key'] ?? ''); if (!idem) return reply.code(400).send(errorBody('BAD_REQUEST','Idempotency-Key required'))
     const deviceId = String(r.headers['x-device-id'] ?? 'web')
+    if (device && device.id !== deviceId) return reply.code(403).send(errorBody('FORBIDDEN', 'device token does not match device id'))
     const existing = [...store.photos.values()].find(p => p.authorId === u.id && p.idempotencyKey === idem && p.deviceId === deviceId)
     if (existing) return reply.code(200).send(uploadResult(existing, store))
     const usedToday = store.dailyUploadCount(u.id, deviceId)
@@ -36,7 +42,7 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     return reply.code(201).send(uploadResult(p, store))
   })
   app.get('/photos/:id/image', async (r, reply) => {
-    const u = user(r, store)
+    const { account: u } = auth(r, store)
     const p = store.photos.get((r.params as any).id)
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND', 'photo not found'))
@@ -48,10 +54,10 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
       return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable'))
     }
   })
-  const feed = async (r: FastifyRequest, reply: any, mine = false) => { const u = user(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); const photos = (mine ? [...store.photos.values()].filter(p=>p.authorId===u.id) : store.visiblePhotos(u.id)); const etag = `W/\"feed-${photos.map(p=>p.id).join('-')}\"`; if (r.headers['if-none-match'] === etag) return reply.code(304).send(); return reply.send({ items: photos.slice(0, Number((r.query as any)?.limit ?? 8)).map(p=>item(p, u.id, store)), next_cursor: null, etag }) }
+  const feed = async (r: FastifyRequest, reply: any, mine = false) => { const { account: u } = auth(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); const photos = (mine ? [...store.photos.values()].filter(p=>p.authorId===u.id) : store.visiblePhotos(u.id)); const etag = `W/\"feed-${photos.map(p=>p.id).join('-')}\"`; if (r.headers['if-none-match'] === etag) return reply.code(304).send(); return reply.send({ items: photos.slice(0, Number((r.query as any)?.limit ?? 8)).map(p=>item(p, u.id, store)), next_cursor: null, etag }) }
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
   app.delete('/photos/:id', async (r, reply) => {
-    const u = user(r, store), p = store.photos.get((r.params as any).id)
+    const { account: u } = auth(r, store), p = store.photos.get((r.params as any).id)
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found'))
     if (p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN','not owner'))

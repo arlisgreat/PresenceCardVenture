@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildApp } from '../src/app.js'
 
+const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+
 test('exposes a readiness probe that blocks incomplete production configuration', async () => {
   const demo = await buildApp({ uploadsDir: '/tmp/presence-card-test-ready-demo' })
   const demoReady = await demo.inject({ method: 'GET', url: '/health/ready' })
@@ -44,6 +46,8 @@ test('pairs a device after a user binds its short-lived code', async () => {
   assert.equal(deviceState.statusCode, 200)
   const deviceAck = await app.inject({ method: 'POST', url: '/v1/device/ack', headers: { authorization: `Bearer ${status.json().device_token}` } })
   assert.equal(deviceAck.statusCode, 204)
+  const deviceUpload = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: `Bearer ${status.json().device_token}`, 'content-type': 'image/jpeg', 'idempotency-key': 'pair-device-upload', 'x-device-id': deviceId, 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  assert.equal(deviceUpload.statusCode, 201)
   const userAck = await app.inject({ method: 'POST', url: '/v1/device/ack', headers: { authorization: 'Bearer demo-token' } })
   assert.equal(userAck.statusCode, 401)
   await app.close()

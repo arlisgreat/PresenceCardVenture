@@ -37,6 +37,7 @@ export class DemoStore {
     }
   }
   userForToken(token?: string) { return token ? this.users.get(this.tokens.get(token) ?? '') : undefined }
+  deviceForToken(token?: string) { if (!token) return undefined; for (const [id, device] of this.devices) if (device.token === token) return { id, ...device }; return undefined }
   user(id: string) { return this.users.get(id) }
   dailyUploadCount(authorId: string, deviceId: string, now = Date.now()) {
     const day = new Date(now).toISOString().slice(0, 10)
