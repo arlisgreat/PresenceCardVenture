@@ -38,6 +38,13 @@ export type AiJob = {
   message?: string
 }
 
+class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 const API = '/v1'
 
 async function jpegPayload(file: File): Promise<Blob | File> {
@@ -85,10 +92,13 @@ export async function uploadPhoto(file: File, options: { filterId: string; capti
   try {
     const payload = await jpegPayload(file)
     const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': '1080', 'X-Height': '1350' } })
-    if (!response.ok) throw new Error(await response.text())
+    if (!response.ok) throw new ApiError(response.status, (await response.text()) || `Request failed: ${response.status}`)
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
-    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: result.url ?? localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
-  } catch {
+    const imageUrl = result.url ?? localUrl
+    if (result.url) URL.revokeObjectURL(localUrl)
+    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: imageUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error
     return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
   }
 }

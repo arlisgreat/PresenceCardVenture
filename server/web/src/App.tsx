@@ -119,7 +119,7 @@ function App() {
         {view === 'feed' && <FeedView feed={visibleFeed} circle={circle} onCircle={setCircle} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} onCreate={() => setView('create')} />}
         {view === 'footprint' && <FootprintView feed={feed.filter(item => item.mine)} onDelete={onDelete} />}
         {view === 'library' && <PlayLibraryView onChoose={message => setToast(message)} />}
-        {view === 'create' && <CreateView onPublished={onPublished} onCancel={() => setView('feed')} />}
+        {view === 'create' && <CreateView onPublished={onPublished} onCancel={() => setView('feed')} onToast={setToast} />}
         {view === 'messages' && <MessagesView onToast={setToast} />}
         {view === 'ai' && <AiView feed={feed} onToast={setToast} />}
         {view === 'device' && <DeviceView state={deviceState} feed={feed} onToast={setToast} />}
@@ -159,7 +159,7 @@ function PhotoCard({ item, burst, onReact, onPoke, onHeartBurst, onDelete }: { i
   </article>
 }
 
-function CreateView({ onPublished, onCancel }: { onPublished: (item: FeedItem) => void; onCancel: () => void }) {
+function CreateView({ onPublished, onCancel, onToast }: { onPublished: (item: FeedItem) => void; onCancel: () => void; onToast: (message: string) => void }) {
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState('')
   const [play, setPlay] = useState<PlayType>('beauty')
@@ -172,7 +172,18 @@ function CreateView({ onPublished, onCancel }: { onPublished: (item: FeedItem) =
   const inputRef = useRef<HTMLInputElement>(null)
 
   function selectFile(next: File | undefined) { if (!next) return; setFile(next); setPreview(URL.createObjectURL(next)) }
-  async function publish() { if (!file) { inputRef.current?.click(); return }; setBusy(true); const item = await uploadPhoto(file, { filterId, caption, play, beauty, sticker }); setBusy(false); onPublished(item) }
+  async function publish() {
+    if (!file) { inputRef.current?.click(); return }
+    setBusy(true)
+    try {
+      const item = await uploadPhoto(file, { filterId, caption, play, beauty, sticker })
+      onPublished(item)
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '照片暂时没有送达')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const playOptions: Array<{ id: PlayType; title: string; copy: string; color: string }> = [
     { id: 'beauty', title: '轻美颜', copy: '把人拍好看，但克制', color: 'blush' },
