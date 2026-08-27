@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, pushDeviceConfig, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
+import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, pushDeviceConfig, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -253,8 +253,10 @@ function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_
       } else if (action === 'config') {
         if (!deviceToken) { onToast('先绑定设备，再下发玩法'); return }
         const result = await pushDeviceConfig(DEVICE_ID, selectedConfig)
+        const state = await getDeviceStateForToken(deviceToken)
+        if (state.pending_config?.id !== result.config_id) throw new Error('device config was not queued')
         setAppliedConfig({ id: result.config_id, name: selectedConfig.name })
-        log(`POST /v1/device/config · 202 · ${selectedConfig.name} queued`)
+        log(`POST /v1/device/config · 202 · ${selectedConfig.name} queued · state confirmed`)
       } else if (action === 'upload') {
         if (!deviceToken) { onToast('先绑定设备，再模拟拍照上传'); return }
         const result = await uploadDevicePhoto(new Blob([DEVICE_DEMO_JPEG], { type: 'image/jpeg' }), deviceToken, DEVICE_ID, `web-device-${Date.now()}`)

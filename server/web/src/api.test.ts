@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getPairStatus, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceStateForToken, getPairStatus, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -123,6 +123,22 @@ test('device config helper queues a selected play for the bound device', async (
     const result = await pushDeviceConfig('dvc_test', { filterId: 'film', playType: 'ccd', beauty: 28, sticker: 'star' })
     assert.equal(result.config_id, 'cfg_test')
     assert.deepEqual(request, { url: '/v1/device/config', method: 'POST', authorization: 'Bearer demo-token', body: JSON.stringify({ device_id: 'dvc_test', filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star' }) })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('device state helper reads pending config with the device token', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; method?: string; authorization?: string } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), method: init?.method, authorization: new Headers(init?.headers).get('Authorization') ?? undefined }
+    return new Response(JSON.stringify({ unseen_count: 1, pending_friend_requests: 0, server_time: '2026-08-28T00:00:00.000Z', pending_config: { id: 'cfg_test', filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star', updated_at: '2026-08-28T00:00:00.000Z' } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const state = await getDeviceStateForToken('device-token-test')
+    assert.equal(state.pending_config?.id, 'cfg_test')
+    assert.deepEqual(request, { url: '/v1/device/state', method: 'GET', authorization: 'Bearer device-token-test' })
   } finally {
     globalThis.fetch = originalFetch
   }

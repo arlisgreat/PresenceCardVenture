@@ -252,8 +252,14 @@ export async function deleteAiJob(id: string): Promise<void> {
   await request(`/ai/jobs/${id}/result`, { method: 'DELETE' })
 }
 
-export async function getDeviceState(): Promise<{ unseen_count: number; pending_friend_requests: number; server_time: string }> {
-  try { return await request('/device/state') } catch { return { unseen_count: 3, pending_friend_requests: 1, server_time: new Date().toISOString() } }
+export type DeviceState = { unseen_count: number; pending_friend_requests: number; server_time: string; pending_config?: DeviceConfig | null }
+
+export async function getDeviceState(): Promise<DeviceState> {
+  try { return await request<DeviceState>('/device/state') } catch { return { unseen_count: 3, pending_friend_requests: 1, server_time: new Date().toISOString(), pending_config: null } }
+}
+
+export async function getDeviceStateForToken(deviceToken: string): Promise<DeviceState> {
+  return requestWithToken<DeviceState>('/device/state', deviceToken, { method: 'GET' })
 }
 
 export type DeviceFeedPage = { items: FeedItem[]; next_cursor?: string | null; etag?: string }
