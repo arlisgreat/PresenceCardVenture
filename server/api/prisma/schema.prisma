@@ -1,0 +1,134 @@
+// Presence Card · 数据模型
+// 权威说明见 docs/01-cloud-architecture.md §4（本文件即其 Prisma 实现）
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  username     String   @unique
+  passwordHash String
+  displayName  String
+  friendCode   String   @unique // 6 位，加好友用，可刷新
+  createdAt    DateTime @default(now())
+
+  devices              Device[]
+  photos               Photo[]
+  reactions            Reaction[]
+  friendshipsRequested Friendship[]   @relation("requester")
+  friendshipsReceived  Friendship[]   @relation("addressee")
+  offlineTickets       OfflineTicket[] @relation("ticketOwner")
+  claimedTickets       OfflineTicket[] @relation("ticketClaimer")
+
+  @@map("users")
+}
+
+model Device {
+  id            String    @id // 出厂唯一 id（MAC 派生 / 烧录 uuid）
+  userId        String?   @db.Uuid
+  user          User?     @relation(fields: [userId], references: [id])
+  label         String?
+  pairCode      String?
+  pairExpiresAt DateTime?
+  tokenHash     String? // device_token 的 SHA-256，明文不落库
+  fwVersion     String?
+  lastSeenAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  idempotencyKeys IdempotencyKey[]
+
+  @@map("devices")
+}
+
+/// 上传幂等：同 (device, key) 重复提交返回首次结果 —— docs/02 §2
+model IdempotencyKey {
+  deviceId  String
+  device    Device   @relation(fields: [deviceId], references: [id])
+  key       String
+  photoId   String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  @@id([deviceId, key])
+  @@map("idempotency_keys")
+}
+
+enum FriendshipStatus {
+  pending
+  accepted
+  blocked
+}
+
+enum FriendshipSource {
+  web
+  offline_ticket
+}
+
+model Friendship {
+  id          String           @id @default(uuid()) @db.Uuid
+  requesterId String           @db.Uuid
+  requester   User             @relation("requester", fields: [requesterId], references: [id])
+  addresseeId String           @db.Uuid
+  addressee   User             @relation("addressee", fields: [addresseeId], references: [id])
+  status      FriendshipStatus @default(pending)
+  source      FriendshipSource @default(web)
+  createdAt   DateTime         @default(now())
+
+  @@unique([requesterId, addresseeId])
+  @@map("friendships")
+}
+
+model Photo {
+  id        String   @id @default(uuid()) @db.Uuid
+  authorId  String   @db.Uuid
+  author    User     @relation(fields: [authorId], references: [id])
+  ossKey    String // photos/{author_id}/{photo_id}.jpg
+  filterId  String   @default("none") // 滤镜清单见 docs/02 §5
+  caption   String? // ≤ 140 字符
+  width     Int
+  height    Int
+  sizeBytes Int
+  createdAt DateTime @default(now())
+
+  reactions Reaction[]
+
+  @@index([authorId, createdAt(sort: Desc)])
+  @@map("photos")
+}
+
+enum ReactionType {
+  heart
+  thumbsup
+  wow
+}
+
+model Reaction {
+  photoId   String       @db.Uuid
+  photo     Photo        @relation(fields: [photoId], references: [id])
+  userId    String       @db.Uuid
+  user      User         @relation(fields: [userId], references: [id])
+  type      ReactionType
+  createdAt DateTime     @default(now())
+
+  @@id([photoId, userId, type])
+  @@map("reactions")
+}
+
+/// Phase 2 预留：离线加好友票（服务器预签发 HMAC 票据，ESP-NOW 见面互递）—— docs/01 §8
+model OfflineTicket {
+  ticketId  String    @id
+  ownerId   String    @db.Uuid
+  owner     User      @relation("ticketOwner", fields: [ownerId], references: [id])
+  payload   String // HMAC 签名 payload (base64)
+  claimedBy String?   @db.Uuid
+  claimer   User?     @relation("ticketClaimer", fields: [claimedBy], references: [id])
+  expiresAt DateTime
+  claimedAt DateTime?
+
+  @@map("offline_tickets")
+}

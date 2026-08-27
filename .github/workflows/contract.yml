@@ -1,0 +1,15 @@
+name: contract
+on:
+  pull_request:
+    paths: ['docs/03-device-api.openapi.yaml', 'docs/02-device-api-v1.md']
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install pyyaml
+      - name: OpenAPI YAML 语法校验
+        run: python -c "import yaml; yaml.safe_load(open('docs/03-device-api.openapi.yaml')); print('openapi yaml ok')"
