@@ -274,6 +274,15 @@ paths:
       responses:
         "204": { description: 已接收 }
 
+  /device/ack:
+    post:
+      tags: [device]
+      summary: 回执轻信号
+      description: 设备确认已处理下发的动态或反应；需要 device_token。
+      responses:
+        "204": { description: 已接收 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 components:
   securitySchemes:
     bearerAuth:

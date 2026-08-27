@@ -220,7 +220,11 @@ sequenceDiagram
 取消：`DELETE /photos/{photo_id}/reactions/heart` → `204`。
 `type` 枚举：`heart | thumbsup | wow`（固件按键映射建议：❤️）。
 
-### 3.5 我的历史（可选）
+### 3.5 回执轻信号
+
+`POST /device/ack` —— 需要 `Authorization: Bearer <device_token>`，设备完成动态展示或反应处理后调用，成功返回 `204`。未携带有效 token 返回 `401 TOKEN_INVALID`。
+
+### 3.6 我的历史（可选）
 
 `GET /photos/mine?cursor=` —— 结构同 feed，用于设备翻自己拍过的照片。
 

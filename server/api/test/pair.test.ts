@@ -5,6 +5,11 @@ import { buildApp } from '../src/app.js'
 test('pairs a device after a user binds its short-lived code', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-pair' })
   const deviceId = 'dvc_pair_test'
+  const invalid = await app.inject({ method: 'POST', url: '/v1/pair/code', payload: {} })
+  assert.equal(invalid.statusCode, 400)
+  assert.equal(invalid.json().error.code, 'BAD_REQUEST')
+  const unauthorizedAck = await app.inject({ method: 'POST', url: '/v1/device/ack' })
+  assert.equal(unauthorizedAck.statusCode, 401)
   const code = await app.inject({ method: 'POST', url: '/v1/pair/code', payload: { device_id: deviceId, fw_version: '0.1.0' } })
   assert.equal(code.statusCode, 200)
   assert.equal(code.json().pair_code, '482913')
