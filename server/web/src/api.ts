@@ -33,9 +33,9 @@ export type AiJob = {
 const API = '/v1'
 
 const demoFeed: FeedItem[] = [
-  { id: 'seed-1', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', caption: '傍晚的风从窗台进来。', created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(), image_url: 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=1000&q=85', reactions: { heart: 12, star: 4 }, my_reactions: [], circle: '傍晚的天空' },
-  { id: 'seed-2', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'film', caption: '把今天折成一张小卡。', created_at: new Date(Date.now() - 1000 * 60 * 72).toISOString(), image_url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=1000&q=85', reactions: { heart: 8, star: 2 }, my_reactions: [], circle: '小圈' },
-  { id: 'seed-3', author: { username: 'luna', display_name: '露娜' }, filter_id: 'ccd', caption: '今天也有好好在场。', created_at: new Date(Date.now() - 1000 * 60 * 160).toISOString(), image_url: 'https://images.unsplash.com/photo-1511632765486-a01980e01a18?auto=format&fit=crop&w=1000&q=85', reactions: { heart: 19, star: 7 }, my_reactions: [], circle: '宿舍窗台' },
+  { id: 'seed-1', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', caption: '傍晚的风从窗台进来。', created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(), image_url: '/assets/feed-window.jpg', reactions: { heart: 12, star: 4 }, my_reactions: [], circle: '傍晚的天空' },
+  { id: 'seed-2', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'film', caption: '把今天折成一张小卡。', created_at: new Date(Date.now() - 1000 * 60 * 72).toISOString(), image_url: '/assets/feed-portrait.jpg', reactions: { heart: 8, star: 2 }, my_reactions: [], circle: '小圈' },
+  { id: 'seed-3', author: { username: 'luna', display_name: '露娜' }, filter_id: 'ccd', caption: '今天也有好好在场。', created_at: new Date(Date.now() - 1000 * 60 * 160).toISOString(), image_url: '/assets/feed-friends.jpg', reactions: { heart: 19, star: 7 }, my_reactions: [], circle: '宿舍窗台' },
 ]
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
