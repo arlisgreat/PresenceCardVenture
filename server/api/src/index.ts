@@ -12,7 +12,7 @@ app.get('/health', async () => ({
 // TODO(全栈): 实现 v1 路由。
 //   权威规范:   docs/02-device-api-v1.md
 //   机器可读契约: docs/03-device-api.openapi.yaml
-//   数据模型已就绪: prisma/schema.prisma（对应 docs/01 §4）
+//   数据模型: prisma/schema.prisma
 // 建议按契约拆模块：
 //   app.register(import('./routes/pair.js'),    { prefix: '/v1/pair' })
 //   app.register(import('./routes/photos.js'),  { prefix: '/v1/photos' })

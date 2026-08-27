@@ -1,4 +1,4 @@
-// 占位壳：UI 高保真稿（W2，见 docs/04 §6）落地后替换。
+// 占位壳：按吉吉的设计实现（docs/handoffs/jiji.md）。
 // 页面清单见 docs/00 §5：时间线 / 绑定设备 / 加好友 / 我的主页
 export default function App() {
   return (

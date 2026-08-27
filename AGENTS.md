@@ -1,6 +1,6 @@
 # AGENTS — PresenceCardVenture
 
-- Monorepo：`docs/`（契约与规划）· `server/api`（Fastify+Prisma）· `server/web`（Vite+React）· `server/deploy`（compose+Caddy）· `firmware`（PlatformIO ESP32-S3）。
-- 规则第一条：`docs/03-device-api.openapi.yaml` 是唯一接口契约；改契约先 PR；规范以 `docs/02-device-api-v1.md` 为准。
-- 里程碑与验收标准：`docs/00-project-plan.md`、`docs/04-kickoff-playbook.md`。
-- 设备端实现 checklist 与验收用例：`docs/02-device-api-v1.md` §6/§7。
+- 范围与分工：`docs/00-project-plan.md`、`docs/05-team-roles.md`。
+- 接口：`docs/03-device-api.openapi.yaml`；语义以 `docs/02-device-api-v1.md` 为准，不一致时同步修正。
+- 契约变更先 PR，经对接方确认后再实现；角色分支合并到 `main`。
+- 联调验收：`docs/04-kickoff-playbook.md`；固件用例见设备规范 §6/§7。

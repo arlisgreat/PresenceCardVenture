@@ -1,5 +1,4 @@
-# 域名在 deploy/.env 注入。Let's Encrypt 证书自动申请续期（ISRG Root X1，ESP32 友好）。
-# 备案完成前的联调：临时把站点地址改成 :80 并用 IP+端口访问（docs/00 §2）。
+# 域名由 deploy/.env 注入；Caddy 管理 HTTPS。
 
 {$API_DOMAIN} {
 	reverse_proxy api:3000

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 每日备份：pg_dump → 本地 → OSS（crontab 示例：0 3 * * * /path/to/backup.sh）
-# 运维基线见 docs/01 §9
+# 部署说明：docs/01-cloud-architecture.md
 set -euo pipefail
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 OUT="/tmp/presence_${TS}.sql.gz"

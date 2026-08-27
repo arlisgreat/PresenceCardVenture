@@ -1,24 +1,15 @@
-# firmware — Presence Card 固件
+# 固件
 
-权威规范：`../docs/02-device-api-v1.md`（§6 实现 checklist / §7 验收用例是验收标准）。
+硬件：M5Stack CoreS3 Lite。板型配置由硬件验证：[platformio.ini](platformio.ini)。
 
-## 构建与烧录
+接口与用例：[设备规范](../docs/02-device-api-v1.md)。交付：[硬件交付单](../docs/handoffs/hardware.md)。
 
-```bash
-pio run             # 构建（CI 对每个 PR 也构建并产出 firmware.bin artifact）
-pio run -t upload   # 本机烧录
-pio device monitor  # 串口日志（格式约定见 docs/04 §5）
-```
-
-## 板型
-
-`platformio.ini` 默认 `esp32-s3-devkitc-1`；按实际 M5Stack 板型（CAMS3 Lite / CoreS3 SE / AtomS3）修改 `board`。
-
-## 算法：本地同款设备验证 CI 产物
-
-从 GitHub Actions 的 `firmware-bin` artifact 下载 `firmware.bin`：
+在 `firmware/` 运行：
 
 ```bash
-# 首次需用 pio run -t upload 全量烧录（含 bootloader）；此后验证 CI 产物只刷 app 即可：
-esptool.py --chip esp32s3 --port /dev/cu.usbmodem* write_flash 0x10000 firmware.bin
+pio run
+pio run -t upload
+pio device monitor
 ```
+
+交付固件版本、烧录说明和真机记录；日志格式：`[FW] METHOD PATH STATUS MS`。
