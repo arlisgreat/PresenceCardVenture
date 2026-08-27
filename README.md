@@ -12,7 +12,7 @@
 
 | 目录 | 内容 | Owner |
 |------|------|-------|
-| `docs/` | 规划 / 架构 / API 规范 / OpenAPI 契约 / kickoff 手册 | 技术一号位 |
+| `docs/` | 规划 / 架构 / API 规范 / OpenAPI 契约 / kickoff 手册 | 算法 |
 | `server/api/` | Fastify + Prisma API 服务 | 全栈 |
 | `server/web/` | Vite + React 社区 web | 全栈（视觉稿来自 UI） |
 | `server/deploy/` | docker-compose + Caddyfile + 备份脚本 | 全栈 |
@@ -43,7 +43,7 @@ cd server/deploy && cp .env.example .env && docker compose up -d
 |----------|------|------|
 | `contract` | 改契约/规范的 PR | OpenAPI YAML 校验 |
 | `server-ci` | `server/**` 变更 | api 构建 + `prisma validate`，web 构建 |
-| `firmware-ci` | `firmware/**` 变更 | PlatformIO 构建，产出 `firmware.bin` artifact（**技术一号位下载后在本地同款设备烧录复现**） |
+| `firmware-ci` | `firmware/**` 变更 | PlatformIO 构建，产出 `firmware.bin` artifact（算法下载后在本地同款设备烧录验证） |
 
 ## 文档索引（docs/）
 

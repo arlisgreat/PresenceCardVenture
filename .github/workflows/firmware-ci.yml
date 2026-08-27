@@ -16,7 +16,7 @@ jobs:
       - run: pip install platformio
       - run: pio run
         working-directory: firmware
-      # firmware.bin → artifact：技术一号位下载后在本地同款设备烧录复现（docs/04 §5）
+      # firmware.bin → artifact：算法下载后在本地同款设备烧录验证（docs/04 §5）
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-bin

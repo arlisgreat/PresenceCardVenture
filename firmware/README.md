@@ -14,7 +14,7 @@ pio device monitor  # 串口日志（格式约定见 docs/04 §5）
 
 `platformio.ini` 默认 `esp32-s3-devkitc-1`；按实际 M5Stack 板型（CAMS3 Lite / CoreS3 SE / AtomS3）修改 `board`。
 
-## 给技术一号位（本地同款设备复现 CI 产物）
+## 算法：本地同款设备验证 CI 产物
 
 从 GitHub Actions 的 `firmware-bin` artifact 下载 `firmware.bin`：
 
