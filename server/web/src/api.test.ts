@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deviceAck, deviceHeartbeat, getPairStatus, uploadDevicePhoto } from './api.js'
+import { deviceAck, deviceHeartbeat, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -49,5 +49,27 @@ test('device photo upload helper sends JPEG bytes with device identity headers',
     assert.equal(await new Response(captured?.init?.body).arrayBuffer().then(buffer => new Uint8Array(buffer)[0]), 0xff)
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('web photo upload includes the selected circle in metadata', async () => {
+  const originalFetch = globalThis.fetch
+  const originalCreateObjectUrl = URL.createObjectURL
+  const originalRevokeObjectUrl = URL.revokeObjectURL
+  let capturedHeaders: Headers | undefined
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedHeaders = new Headers(init?.headers)
+    return new Response(JSON.stringify({ photo_id: 'p_circle_test', url: '/v1/photos/p_circle_test/image', created_at: '2026-08-28T00:00:00.000Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  URL.createObjectURL = (() => 'blob:test-circle') as typeof URL.createObjectURL
+  URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
+  try {
+    const photo = await uploadPhoto(new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'capture.jpg', { type: 'image/jpeg' }), { filterId: 'warm', caption: '窗边', play: 'ccd', beauty: 12, sticker: 'none', circle: '傍晚的天空' })
+    assert.equal(photo.circle, '傍晚的天空')
+    assert.equal(capturedHeaders?.get('X-Circle'), encodeURIComponent('傍晚的天空'))
+  } finally {
+    globalThis.fetch = originalFetch
+    URL.createObjectURL = originalCreateObjectUrl
+    URL.revokeObjectURL = originalRevokeObjectUrl
   }
 })

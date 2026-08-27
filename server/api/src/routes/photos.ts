@@ -31,12 +31,17 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
       try { caption = decodeURIComponent(String(r.headers['x-caption'])) } catch { return reply.code(400).send(errorBody('BAD_REQUEST', 'X-Caption must be URL-encoded UTF-8')) }
       if (caption.length > 140) return reply.code(400).send(errorBody('BAD_REQUEST', 'caption must be at most 140 characters'))
     }
+    let circle = '小圈'
+    if (r.headers['x-circle']) {
+      try { circle = decodeURIComponent(String(r.headers['x-circle'])) } catch { return reply.code(400).send(errorBody('BAD_REQUEST', 'X-Circle must be URL-encoded UTF-8')) }
+      if (!circle || circle.length > 32) return reply.code(400).send(errorBody('BAD_REQUEST', 'circle must be between 1 and 32 characters'))
+    }
     const width = Number(r.headers['x-width'] ?? 320)
     const height = Number(r.headers['x-height'] ?? 240)
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192) return reply.code(400).send(errorBody('BAD_REQUEST', 'width and height must be integers from 1 to 8192'))
     const beauty = Number(r.headers['x-beauty'] ?? 0)
     if (!Number.isFinite(beauty) || beauty < 0 || beauty > 100) return reply.code(400).send(errorBody('BAD_REQUEST', 'beauty must be between 0 and 100'))
-    const id = `p_${randomUUID()}`; const p = { id, authorId: u.id, filterId: String(r.headers['x-filter-id'] ?? 'none'), playType: String(r.headers['x-play-type'] ?? 'ccd'), beauty, sticker: String(r.headers['x-sticker'] ?? 'none'), caption, circle: String(r.headers['x-circle'] ?? '小圈'), width, height, createdAt: new Date().toISOString(), original: body, processed: body, idempotencyKey: idem, deviceId }
+    const id = `p_${randomUUID()}`; const p = { id, authorId: u.id, filterId: String(r.headers['x-filter-id'] ?? 'none'), playType: String(r.headers['x-play-type'] ?? 'ccd'), beauty, sticker: String(r.headers['x-sticker'] ?? 'none'), caption, circle, width, height, createdAt: new Date().toISOString(), original: body, processed: body, idempotencyKey: idem, deviceId }
     try { await files.save(p) } catch { return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable')) }
     store.photos.set(id, p)
     return reply.code(201).send(uploadResult(p, store))

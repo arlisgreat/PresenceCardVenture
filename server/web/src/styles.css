@@ -181,6 +181,11 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .sticker.selected { border-color: var(--sage-d); background: rgba(168,191,160,.28); color: var(--sage-d); }
 .wide { width: 100%; justify-content: space-between; }
 
+.circle-picker { display: flex; flex-wrap: wrap; gap: 7px; }
+.circle-choice { border: 1px solid var(--hair); border-radius: 16px; background: rgba(255,255,255,.58); color: var(--muted); padding: 7px 11px; font-size: 10px; transition: border-color .2s, background .2s, color .2s; }
+.circle-choice:hover { border-color: var(--mist-d); color: var(--ink); }
+.circle-choice.selected { border-color: var(--mist-d); background: var(--mist); color: #567592; }
+
 .signal-count, .consent-badge, .device-pill { padding: 7px 11px; border-radius: 20px; background: var(--mist); color: #5c7e9c; font-size: 10px; white-space: nowrap; }
 .messages-layout { display: grid; grid-template-columns: 220px 1fr; min-height: 510px; margin-top: 42px; border: 1px solid var(--hair); background: rgba(255,255,255,.43); }
 .friend-list { border-right: 1px solid var(--hair); padding: 12px; }

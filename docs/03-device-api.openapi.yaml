@@ -92,6 +92,7 @@ paths:
         - { name: Idempotency-Key, in: header, required: true, schema: { type: string }, description: "{device_id}-{boot}-{seq}，重试同键" }
         - { name: X-Device-ID, in: header, required: true, schema: { type: string, example: dvc_a1b2c3d4e5f6 }, description: "必须与配对时的 device_id 一致" }
         - { name: X-Filter-Id, in: header, required: true, schema: { type: string, example: warm } }
+        - { name: X-Circle, in: header, required: false, schema: { type: string, example: "傍晚的天空" }, description: "URL-encode 的 UTF-8，默认小圈" }
         - { name: X-Caption, in: header, required: false, schema: { type: string }, description: "URL-encode 的 UTF-8，≤140 字符" }
         - { name: X-Width, in: header, required: true, schema: { type: integer, example: 320 } }
         - { name: X-Height, in: header, required: true, schema: { type: integer, example: 240 } }

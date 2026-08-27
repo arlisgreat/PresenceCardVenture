@@ -14,6 +14,7 @@ test('uploads jpeg, supports idempotent retry, and serves image', async () => {
     'x-play-type': 'template',
     'x-beauty': '42',
     'x-sticker': 'star',
+    'x-circle': encodeURIComponent('傍晚的天空'),
     'x-width': '320',
     'x-height': '240',
   }
@@ -30,6 +31,7 @@ test('uploads jpeg, supports idempotent retry, and serves image', async () => {
   assert.equal(uploaded.play_type, 'template')
   assert.equal(uploaded.beauty, 42)
   assert.equal(uploaded.sticker, 'star')
+  assert.equal(uploaded.circle, '傍晚的天空')
   await app.close()
 })
 

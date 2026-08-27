@@ -135,6 +135,7 @@ sequenceDiagram
 | `Content-Length` | ✅ | 用定长，**不要 chunked**（嵌入式兼容性） |
 | `Idempotency-Key` | ✅ | `"{device_id}-{boot计数}-{照片序号}"`，同一张照片重试必须同键 |
 | `X-Device-ID` | ✅ | 必须与配对时的 `device_id` 一致，防止设备 token 跨设备复用 |
+| `X-Circle` | 否 | URL-encode 的 UTF-8 圈子名，默认 `小圈`，最长 32 字符 |
 | `X-Filter-Id` | ✅ | 滤镜 id，无滤镜传 `none`（见 §5 滤镜清单） |
 | `X-Caption` | 否 | ≤140 字符，URL-encode 后的 UTF-8 |
 | `X-Width` / `X-Height` | ✅ | 如 `320` / `240` |

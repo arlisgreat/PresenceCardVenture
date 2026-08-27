@@ -133,20 +133,21 @@ export async function getFeed(): Promise<FeedItem[]> {
   }
 }
 
-export async function uploadPhoto(file: File, options: { filterId: string; caption: string; play: PlayType; beauty: number; sticker: string }): Promise<FeedItem> {
+export async function uploadPhoto(file: File, options: { filterId: string; caption: string; play: PlayType; beauty: number; sticker: string; circle?: string }): Promise<FeedItem> {
   const localUrl = URL.createObjectURL(file)
   try {
     const processed = await jpegPayload(file, options)
     const payload = processed.blob
-    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
+    const circle = options.circle ?? '小圈'
+    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Circle': encodeURIComponent(circle), 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
     if (!response.ok) throw new ApiError(response.status, (await response.text()) || `Request failed: ${response.status}`)
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
     const imageUrl = result.url ?? localUrl
     if (result.url) URL.revokeObjectURL(localUrl)
-    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: imageUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
+    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: imageUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle }
   } catch (error) {
     if (!(error instanceof TypeError)) throw error
-    return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
+    return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: options.circle ?? '小圈' }
   }
 }
 
