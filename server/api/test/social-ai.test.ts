@@ -12,6 +12,8 @@ test('supports friends, reactions, and messages', async () => {
   const photoId = feed.json().items[0].photo_id
   const reaction = await app.inject({ method: 'POST', url: `/v1/photos/${photoId}/reactions`, headers: { ...auth, 'content-type': 'application/json' }, payload: { type: 'heart' } })
   assert.equal(reaction.statusCode, 201)
+  const cleared = await app.inject({ method: 'DELETE', url: `/v1/photos/${photoId}/reactions/heart`, headers: { ...auth, 'content-type': 'application/json' } })
+  assert.equal(cleared.statusCode, 204)
   const conversation = await app.inject({ method: 'GET', url: '/v1/conversations', headers: auth })
   assert.equal(conversation.statusCode, 200)
   const message = await app.inject({ method: 'POST', url: '/v1/messages', headers: { ...auth, 'content-type': 'application/json' }, payload: { to: friends.json()[0].username, text: 'hello' } })

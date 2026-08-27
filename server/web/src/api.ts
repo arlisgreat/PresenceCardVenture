@@ -60,7 +60,9 @@ const demoFeed: FeedItem[] = [
 ]
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer demo-token', ...(init?.headers ?? {}) } })
+  const headers: Record<string, string> = { Authorization: 'Bearer demo-token', ...(init?.headers as Record<string, string> ?? {}) }
+  if (init?.body) headers['Content-Type'] = 'application/json'
+  const response = await fetch(`${API}${path}`, { ...init, headers })
   if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`)
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -136,6 +138,11 @@ export async function getAiJob(id: string): Promise<AiJob> {
   } catch {
     return { id, status: 'completed', resultUrl: demoFeed[2].image_url, message: '合照已经生成。' }
   }
+}
+
+export async function deleteAiJob(id: string): Promise<void> {
+  if (id.startsWith('ai-')) return
+  await request(`/ai/jobs/${id}/result`, { method: 'DELETE' })
 }
 
 export async function getDeviceState(): Promise<{ unseen_count: number; pending_friend_requests: number; server_time: string }> {

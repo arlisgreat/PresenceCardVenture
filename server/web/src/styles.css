@@ -225,6 +225,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .result-art p { max-width: 220px; margin: 17px 0 0; font: 14px/1.8 'Noto Serif SC', serif; }
 .job-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 17px; border-top: 1px solid var(--hair); }
 .job-status > div { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.job-actions { display: flex; align-items: center; gap: 10px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blush-d); animation: pulse 1.3s infinite; }
 .status-dot.done { background: var(--sage-d); animation: none; }
 @keyframes pulse { 50% { opacity: .35; } }
