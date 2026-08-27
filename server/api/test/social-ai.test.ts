@@ -48,6 +48,7 @@ test('runs authorized AI jobs and rejects unauthorized materials', async () => {
   await new Promise((resolve) => setTimeout(resolve, 30))
   const status = await app.inject({ method: 'GET', url: `/v1/ai/jobs/${jobId}`, headers: auth })
   assert.ok(['processing', 'completed'].includes(status.json().status))
+  assert.equal(status.json().provider, 'simulator')
   const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: auth })
   const friendPhotoId = feed.json().items.find((item: any) => !item.mine).photo_id
   const noConsent = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: [ids[0], friendPhotoId] } })
@@ -56,5 +57,22 @@ test('runs authorized AI jobs and rejects unauthorized materials', async () => {
   assert.equal(consented.statusCode, 202)
   const forbidden = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: ['missing'] } })
   assert.equal(forbidden.statusCode, 403)
+  await app.close()
+})
+
+test('uses an injected AI provider and records provider failures', async () => {
+  const app = await buildApp({
+    uploadsDir: '/tmp/presence-card-test-ai-provider',
+    aiProvider: { name: 'test-provider', generate: async () => ({ status: 'failed', error: 'provider offline' }) },
+  })
+  const auth = { authorization: 'Bearer demo-token' }
+  const materials = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: auth })
+  const ids = materials.json().items.slice(0, 2).map((item: any) => item.photo_id)
+  const created = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: ids } })
+  assert.equal(created.json().provider, 'test-provider')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const status = await app.inject({ method: 'GET', url: `/v1/ai/jobs/${created.json().job_id}`, headers: auth })
+  assert.equal(status.json().status, 'failed')
+  assert.equal(status.json().message, 'provider offline')
   await app.close()
 })
