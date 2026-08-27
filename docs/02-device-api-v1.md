@@ -70,7 +70,7 @@ sequenceDiagram
 ```
 - `device_id`：设备唯一 id，出厂烧录或由 MAC 派生（如 `dvc_` + mac hex），**同一设备终身不变**。
 
-响应 `200`：
+响应 `200`（每次领取生成未使用的随机 6 位数字码；示例值仅作格式说明）：
 ```json
 { "pair_code": "482913", "expires_in": 600 }
 ```
