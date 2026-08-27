@@ -18,3 +18,9 @@
 - 算法交付效果配置、调用样例、超时/失败处理约定及成本评测。
 
 当前 `codex/fullstack` 已提供社区时间线、好友请求、消息、AI 合照任务、照片上传/删除和设备联调接口。生产部署仍需将 DemoStore、本地文件存储和本地 AI 适配器替换为 PostgreSQL、OSS、任务队列及真实模型服务，并按本文件完成密钥、域名、备份和压测配置。
+
+## 就绪探针
+
+- `GET /health` 是存活探针，只表示 Fastify 进程可响应。
+- `GET /health/ready` 是就绪探针；开发模式返回 `200` 并标注 `mode=demo`。
+- 生产启动时设置 `REQUIRE_PRODUCTION_SERVICES=true`（或 `NODE_ENV=production`），就绪探针会要求 `DATABASE_URL`、`OSS_BUCKET`（或 `OBJECT_STORAGE_BUCKET`）和非模拟的 `AI_PROVIDER`，缺项返回 `503`，避免误把 DemoStore 部署为生产服务。

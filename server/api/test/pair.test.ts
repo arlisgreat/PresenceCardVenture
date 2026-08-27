@@ -2,6 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildApp } from '../src/app.js'
 
+test('exposes a readiness probe that blocks incomplete production configuration', async () => {
+  const demo = await buildApp({ uploadsDir: '/tmp/presence-card-test-ready-demo' })
+  const demoReady = await demo.inject({ method: 'GET', url: '/health/ready' })
+  assert.equal(demoReady.statusCode, 200)
+  assert.equal(demoReady.json().status, 'ready')
+  await demo.close()
+
+  const production = await buildApp({ uploadsDir: '/tmp/presence-card-test-ready-production', requireProductionServices: true })
+  const blocked = await production.inject({ method: 'GET', url: '/health/ready' })
+  assert.equal(blocked.statusCode, 503)
+  assert.equal(blocked.json().status, 'blocked')
+  assert.ok(blocked.json().missing.includes('DATABASE_URL'))
+  await production.close()
+})
+
 test('pairs a device after a user binds its short-lived code', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-pair' })
   const deviceId = 'dvc_pair_test'

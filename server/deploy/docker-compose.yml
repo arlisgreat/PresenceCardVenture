@@ -1,6 +1,7 @@
 # Presence Card · ECS 部署（docs/01-cloud-architecture.md）
 # 首次部署：cp .env.example .env 填值 → docker compose up -d →
 #           docker compose exec api npx prisma migrate deploy
+# /health 是 liveness；正式切流前请检查 /health/ready 返回 200。
 services:
   caddy:
     image: caddy:2-alpine
