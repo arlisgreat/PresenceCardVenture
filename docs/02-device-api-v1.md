@@ -201,7 +201,7 @@ sequenceDiagram
 
 `GET /feed?limit=8&cursor=<可选>`
 
-请求头建议带 `If-None-Match: <上次的 etag>`；无更新返回 `304`（无 body）。
+请求头建议带 `If-None-Match: <上次的 etag>`；服务端同时在 JSON 和 HTTP `ETag` 响应头返回 etag，无更新返回带同一 `ETag` 的 `304`（无 body）。
 
 响应 `200`：
 ```json

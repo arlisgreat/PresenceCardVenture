@@ -47,6 +47,18 @@ test('clamps feed limits and rejects malformed values', async () => {
   await app.close()
 })
 
+test('returns the feed etag as an HTTP header and honors 304 requests', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-etag' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const first = await app.inject({ method: 'GET', url: '/v1/feed?limit=8', headers })
+  assert.equal(first.statusCode, 200)
+  assert.equal(first.headers.etag, first.json().etag)
+  const cached = await app.inject({ method: 'GET', url: '/v1/feed?limit=8', headers: { ...headers, 'if-none-match': first.headers.etag } })
+  assert.equal(cached.statusCode, 304)
+  assert.equal(cached.headers.etag, first.headers.etag)
+  await app.close()
+})
+
 test('rejects oversized and non-jpeg uploads', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-2' })
   const base = { authorization: 'Bearer demo-token', 'idempotency-key': 'k', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }

@@ -68,8 +68,8 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const limit = Math.min(32, parsedLimit)
     const photos = (mine ? [...store.photos.values()].filter(p => p.authorId === u.id) : store.visiblePhotos(u.id))
     const etag = `W/\"feed-${photos.map(p => p.id).join('-')}\"`
-    if (r.headers['if-none-match'] === etag) return reply.code(304).send()
-    return reply.send({ items: photos.slice(0, limit).map(p => item(p, u.id, store)), next_cursor: null, etag })
+    if (r.headers['if-none-match'] === etag) return reply.code(304).header('ETag', etag).send()
+    return reply.header('ETag', etag).send({ items: photos.slice(0, limit).map(p => item(p, u.id, store)), next_cursor: null, etag })
   }
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
   app.delete('/photos/:id', async (r, reply) => {
