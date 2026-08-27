@@ -64,9 +64,14 @@ test('queues a play config for the bound device and clears it on device ack', as
   const status = await app.inject({ method: 'GET', url: `/v1/pair/status?device_id=${deviceId}&pair_code=${pairCode}` })
   const deviceToken = status.json().device_token
 
-  const queued = await app.inject({ method: 'POST', url: '/v1/device/config', headers: { authorization: 'Bearer demo-token', 'content-type': 'application/json' }, payload: { device_id: deviceId, filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star' } })
+  const configHeaders = { authorization: 'Bearer demo-token', 'content-type': 'application/json', 'idempotency-key': 'config-retry-1' }
+  const configPayload = { device_id: deviceId, filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star' }
+  const queued = await app.inject({ method: 'POST', url: '/v1/device/config', headers: configHeaders, payload: configPayload })
   assert.equal(queued.statusCode, 202)
   assert.match(queued.json().config_id, /^cfg_/)
+  const retry = await app.inject({ method: 'POST', url: '/v1/device/config', headers: configHeaders, payload: configPayload })
+  assert.equal(retry.statusCode, 200)
+  assert.equal(retry.json().config_id, queued.json().config_id)
   const state = await app.inject({ method: 'GET', url: '/v1/device/state', headers: { authorization: `Bearer ${deviceToken}` } })
   assert.deepEqual(state.json().pending_config, { id: queued.json().config_id, filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star', updated_at: state.json().pending_config.updated_at })
 

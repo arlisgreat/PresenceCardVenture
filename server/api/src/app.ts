@@ -37,6 +37,8 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     if (!user) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     if (!device || !device.userId) return reply.code(404).send(errorBody('NOT_FOUND', 'device not found'))
     if (device.userId !== user.id) return reply.code(403).send(errorBody('FORBIDDEN', 'device is not owned by this user'))
+    const idempotencyKey = String(r.headers['idempotency-key'] ?? '')
+    if (idempotencyKey && device.configIdempotencyKey === idempotencyKey && device.configResponse) return reply.code(200).send(device.configResponse)
     const filterId = String(body.filter_id ?? '')
     const playType = String(body.play_type ?? '')
     const sticker = String(body.sticker ?? 'none')
@@ -44,7 +46,9 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     if (!['none', 'warm', 'bw', 'film', 'vivid'].includes(filterId) || !['beauty', 'ccd', 'template'].includes(playType) || !['none', 'star', 'date'].includes(sticker) || !Number.isInteger(beauty) || beauty < 0 || beauty > 100) return reply.code(400).send(errorBody('BAD_REQUEST', 'invalid device config'))
     const config = { id: `cfg_${randomUUID()}`, filter_id: filterId, play_type: playType, beauty, sticker, updated_at: new Date().toISOString() }
     device.pendingConfig = config
-    return reply.code(202).send({ config_id: config.id, status: 'queued', device_id: body.device_id, config })
+    const response = { config_id: config.id, status: 'queued' as const, device_id: body.device_id, config }
+    if (idempotencyKey) { device.configIdempotencyKey = idempotencyKey; device.configResponse = response }
+    return reply.code(202).send(response)
   })
   app.register(async (scope)=>photoRoutes(scope,{store,files}),{prefix:'/v1'}); app.register(async scope=>socialRoutes(scope,store),{prefix:'/v1'}); app.register(async scope=>aiRoutes(scope,store,options.aiProvider),{prefix:'/v1'})
   app.get('/v1/device/state', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const user=store.userForToken(token);const device=[...store.devices.values()].find(d=>d.token===token);if(!user&&!device)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const pending_friend_requests=user?[...store.friendRequests.values()].filter(x=>x.status==='pending'&&x.addresseeId===user.id).length:0;return {unseen_count:store.photos.size,pending_friend_requests,server_time:new Date().toISOString(),fw_latest:null,pending_config:device?.pendingConfig ?? null}})

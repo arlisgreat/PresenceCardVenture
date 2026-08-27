@@ -275,6 +275,8 @@ paths:
       tags: [device]
       summary: Web 为已绑定设备下发玩法配置
       description: 由设备主人在 Web 端调用；设备下一次读取 `/device/state` 时取得 pending_config。
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string }, description: 同一设备重试同 key 不会重复排队 }
       requestBody:
         required: true
         content:

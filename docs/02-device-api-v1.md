@@ -182,6 +182,8 @@ sequenceDiagram
 
 设备主人在 Web 端调用 `POST /device/config`，服务端只接受已绑定设备主人提交的配置。设备下一次读取 `/device/state` 即可取得 `pending_config`，成功应用后通过 ack 清除。
 
+请求可带 `Idempotency-Key`；同一设备使用相同 key 重试时返回 `200` 和第一次的 `config_id`，不会重复排队。
+
 ```json
 {
   "device_id": "dvc_a1b2c3d4e5f6",

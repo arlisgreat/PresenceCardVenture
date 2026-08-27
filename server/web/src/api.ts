@@ -276,8 +276,8 @@ export async function getDeviceFeed(deviceToken: string, limit = 8, etag?: strin
   return { ...data, etag: response.headers.get('ETag') ?? data.etag, items: (data.items ?? []).map(item => ({ ...item, id: item.id ?? item.photo_id ?? `device-${item.created_at}` })) }
 }
 
-export async function pushDeviceConfig(deviceId: string, config: { filterId: string; playType: PlayType; beauty: number; sticker: string }): Promise<{ config_id: string; status: 'queued'; device_id: string; config: DeviceConfig }> {
-  return request('/device/config', { method: 'POST', body: JSON.stringify({ device_id: deviceId, filter_id: config.filterId, play_type: config.playType, beauty: config.beauty, sticker: config.sticker }) })
+export async function pushDeviceConfig(deviceId: string, config: { filterId: string; playType: PlayType; beauty: number; sticker: string }, idempotencyKey = `web-config-${deviceId}-${Date.now()}`): Promise<{ config_id: string; status: 'queued'; device_id: string; config: DeviceConfig }> {
+  return request('/device/config', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ device_id: deviceId, filter_id: config.filterId, play_type: config.playType, beauty: config.beauty, sticker: config.sticker }) })
 }
 
 export async function requestPairCode(deviceId: string): Promise<{ pair_code: string; expires_in: number }> {
