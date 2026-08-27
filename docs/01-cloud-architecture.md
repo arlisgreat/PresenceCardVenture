@@ -28,3 +28,5 @@
 - Caddy 在 `APP_DOMAIN` 下将 `/v1/*` 同域反代到 API，并为 React Router 路径回退到 `index.html`；这样 Web 的相对 API 地址在开发和生产都保持一致。
 
 AI 合照任务只依赖 provider 契约：provider 返回 `completed`、`failed` 及结果照片 id，路由负责授权、排队状态和错误持久化。模拟器会返回第一张已授权素材作为可重复预览，不代表真实生图；接入第三方模型时通过 `buildApp({ aiProvider })` 注入，不改 Web 或设备 API。
+
+照片路由同样只依赖 `PhotoStorage`（`save/remove`）契约。默认 `PhotoStore` 写入本地目录供 Demo 使用；生产接入 OSS 时实现该接口并通过 `buildApp({ photoStorage })` 注入，不需要修改上传幂等、权限或删除逻辑。

@@ -58,6 +58,28 @@ test('validates photo metadata without turning malformed headers into server err
   await app.close()
 })
 
+test('routes photo persistence through an injectable storage adapter', async () => {
+  const calls: string[] = []
+  const storage = {
+    async save(photo: { id: string }) { calls.push(`save:${photo.id}`) },
+    async remove(photo: { id: string }) { calls.push(`remove:${photo.id}`) },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-adapter', photoStorage: storage })
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'adapter-1' },
+    payload: jpeg,
+  })
+  assert.equal(created.statusCode, 201)
+  const id = created.json().photo_id
+  assert.deepEqual(calls, [`save:${id}`])
+  const removed = await app.inject({ method: 'DELETE', url: `/v1/photos/${id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(removed.statusCode, 204)
+  assert.deepEqual(calls, [`save:${id}`, `remove:${id}`])
+  await app.close()
+})
+
 test('enforces the per-device daily upload limit', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-limit', uploadDailyLimit: 1 })
   const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }

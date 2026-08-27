@@ -1,14 +1,14 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import path from 'node:path'
 import { DemoStore, errorBody } from './demo-store.js'
-import { PhotoStore } from './photo-store.js'
+import { PhotoStore, type PhotoStorage } from './photo-store.js'
 import { photoRoutes } from './routes/photos.js'
 import { socialRoutes } from './routes/social.js'
 import { aiRoutes } from './routes/ai.js'
 import type { AiProvider } from './ai-provider.js'
 
-export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider } = {}): Promise<FastifyInstance> {
-  const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const files = new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
+export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
+  const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const files = options.photoStorage ?? new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
   const requireProductionServices = options.requireProductionServices ?? (process.env.REQUIRE_PRODUCTION_SERVICES === 'true' || process.env.NODE_ENV === 'production')
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 })
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer' }, (_req, body, done) => done(null, body))

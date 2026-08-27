@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { DemoStore, errorBody } from '../demo-store.js'
-import { PhotoStore } from '../photo-store.js'
+import type { PhotoStorage } from '../photo-store.js'
 
 const user = (r: FastifyRequest, store: DemoStore) => store.userForToken(String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, ''))
-export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStore }) {
+export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStorage }) {
   const { store, files } = opts
   app.post('/photos', async (r, reply) => {
     const u = user(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
