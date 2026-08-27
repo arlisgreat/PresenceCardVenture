@@ -6,3 +6,4 @@ dist/
 .pio/
 .vscode/
 *.log
+server/api/uploads/

@@ -8,5 +8,8 @@
 | [03 OpenAPI](03-device-api.openapi.yaml) | 机器可读接口契约 |
 | [04 联调验收](04-kickoff-playbook.md) | 联调顺序与提交要求 |
 | [05 分支与分工](05-team-roles.md) | 角色分支与交付入口 |
+| [06 项目上下文](06-context-2026-08-27.md) | 会议沉淀的产品与协作背景 |
+| [07 前后端 Demo 范围](07-frontend-backend-demo-scope.md) | 今晚 Demo 的范围与验收标准 |
+| [08 视觉参考](08-visual-design-reference.md) | 产品 HTML 提炼的视觉与交互方向 |
 
 设备接口以 02、03 为准；变更先提 PR，全栈与硬件确认后实现。
