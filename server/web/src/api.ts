@@ -257,11 +257,16 @@ export async function getDeviceState(): Promise<{ unseen_count: number; pending_
 }
 
 export type DeviceFeedPage = { items: FeedItem[]; next_cursor?: string | null; etag?: string }
+export type DeviceConfig = { id: string; filter_id: string; play_type: PlayType; beauty: number; sticker: string; updated_at: string }
 
 export async function getDeviceFeed(deviceToken: string, limit = 8): Promise<DeviceFeedPage> {
   const boundedLimit = Math.max(1, Math.min(32, Math.floor(limit)))
   const response = await requestWithToken<DeviceFeedPage>(`/feed?limit=${boundedLimit}`, deviceToken, { method: 'GET' })
   return { ...response, items: (response.items ?? []).map(item => ({ ...item, id: item.id ?? item.photo_id ?? `device-${item.created_at}` })) }
+}
+
+export async function pushDeviceConfig(deviceId: string, config: { filterId: string; playType: PlayType; beauty: number; sticker: string }): Promise<{ config_id: string; status: 'queued'; device_id: string; config: DeviceConfig }> {
+  return request('/device/config', { method: 'POST', body: JSON.stringify({ device_id: deviceId, filter_id: config.filterId, play_type: config.playType, beauty: config.beauty, sticker: config.sticker }) })
 }
 
 export async function requestPairCode(deviceId: string): Promise<{ pair_code: string; expires_in: number }> {
@@ -280,6 +285,6 @@ export async function deviceHeartbeat(deviceToken: string): Promise<void> {
   await requestWithToken('/device/heartbeat', deviceToken, { method: 'POST', body: JSON.stringify({}) })
 }
 
-export async function deviceAck(deviceToken: string): Promise<void> {
-  await requestWithToken('/device/ack', deviceToken, { method: 'POST', body: JSON.stringify({}) })
+export async function deviceAck(deviceToken: string, configId?: string): Promise<void> {
+  await requestWithToken('/device/ack', deviceToken, configId ? { method: 'POST', body: JSON.stringify({ config_id: configId }) } : { method: 'POST', body: JSON.stringify({}) })
 }

@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify'
-import { randomInt } from 'node:crypto'
+import { randomInt, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { DemoStore, errorBody } from './demo-store.js'
 import { PhotoStore, type PhotoStorage } from './photo-store.js'
@@ -29,10 +29,27 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
   app.post('/v1/pair/code', async (r:any,reply)=>{const {device_id}=r.body??{};if(!device_id)return reply.code(400).send(errorBody('BAD_REQUEST','device_id required'));let code='';do { code=String(randomInt(100000, 1000000)) } while ([...store.devices.values()].some(device => device.pairCode === code));store.devices.set(device_id,{pairCode:code,expiresAt:Date.now()+600000});return {pair_code:code,expires_in:600}})
   app.get('/v1/pair/status', async (r:any,reply)=>{const d=store.devices.get(r.query.device_id);if(!d||d.pairCode!==r.query.pair_code)return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));if(!d.userId)return reply.code(202).send({status:'pending'});return {status:'bound',device_token:d.token,user:{username:store.user(d.userId)?.username,display_name:store.user(d.userId)?.displayName}}})
   app.post('/v1/pair/bind', async (r:any,reply)=>{const u=store.userForToken(String(r.headers.authorization??'').replace(/^Bearer\s+/i,'')), body=r.body??{}, d=store.devices.get(body.device_id);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));if(!d||d.pairCode!==body.pair_code||!d.expiresAt||d.expiresAt<Date.now())return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));d.userId=u.id;d.token=d.token??`device-token-${body.device_id}`;return {status:'bound',device_id:body.device_id,user:{username:u.username,display_name:u.displayName}}})
+  app.post('/v1/device/config', async (r:any, reply) => {
+    const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+    const user = store.userForToken(token)
+    const body = r.body ?? {}
+    const device = store.devices.get(body.device_id)
+    if (!user) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
+    if (!device || !device.userId) return reply.code(404).send(errorBody('NOT_FOUND', 'device not found'))
+    if (device.userId !== user.id) return reply.code(403).send(errorBody('FORBIDDEN', 'device is not owned by this user'))
+    const filterId = String(body.filter_id ?? '')
+    const playType = String(body.play_type ?? '')
+    const sticker = String(body.sticker ?? 'none')
+    const beauty = Number(body.beauty ?? 0)
+    if (!['none', 'warm', 'bw', 'film', 'vivid'].includes(filterId) || !['beauty', 'ccd', 'template'].includes(playType) || !['none', 'star', 'date'].includes(sticker) || !Number.isInteger(beauty) || beauty < 0 || beauty > 100) return reply.code(400).send(errorBody('BAD_REQUEST', 'invalid device config'))
+    const config = { id: `cfg_${randomUUID()}`, filter_id: filterId, play_type: playType, beauty, sticker, updated_at: new Date().toISOString() }
+    device.pendingConfig = config
+    return reply.code(202).send({ config_id: config.id, status: 'queued', device_id: body.device_id, config })
+  })
   app.register(async (scope)=>photoRoutes(scope,{store,files}),{prefix:'/v1'}); app.register(async scope=>socialRoutes(scope,store),{prefix:'/v1'}); app.register(async scope=>aiRoutes(scope,store,options.aiProvider),{prefix:'/v1'})
-  app.get('/v1/device/state', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const user=store.userForToken(token);if(!user&&!([...store.devices.values()].some(d=>d.token===token)))return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const pending_friend_requests=user?[...store.friendRequests.values()].filter(x=>x.status==='pending'&&x.addresseeId===user.id).length:0;return {unseen_count:store.photos.size,pending_friend_requests,server_time:new Date().toISOString(),fw_latest:null}})
+  app.get('/v1/device/state', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const user=store.userForToken(token);const device=[...store.devices.values()].find(d=>d.token===token);if(!user&&!device)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const pending_friend_requests=user?[...store.friendRequests.values()].filter(x=>x.status==='pending'&&x.addresseeId===user.id).length:0;return {unseen_count:store.photos.size,pending_friend_requests,server_time:new Date().toISOString(),fw_latest:null,pending_config:device?.pendingConfig ?? null}})
   app.post('/v1/device/heartbeat', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const d=[...store.devices.values()].find(x=>x.token===token);if(!d)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));d.lastSeen=new Date().toISOString();return reply.code(204).send()})
-  app.post('/v1/device/ack', async (r:any, reply) => { const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,''); if(![...store.devices.values()].some(d=>d.token===token))return reply.code(401).send(errorBody('TOKEN_INVALID','device token required')); return reply.code(204).send() })
+  app.post('/v1/device/ack', async (r:any, reply) => { const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,''); const device=[...store.devices.values()].find(d=>d.token===token); if(!device)return reply.code(401).send(errorBody('TOKEN_INVALID','device token required')); const configId=(r.body as any)?.config_id; if(configId && device.pendingConfig?.id===configId) device.pendingConfig=undefined; return reply.code(204).send() })
   app.get('/v1/plays', async (_r) => ({ items: [{ id: 'beauty', name: '轻美颜', filters: ['soft'] }, { id: 'ccd', name: 'CCD 滤镜', filters: ['warm', 'bw', 'film', 'vivid'] }, { id: 'template', name: '素材模板', filters: ['none'] }] }))
   app.get('/v1/footprints', async (r:any, reply) => { const u=store.userForToken(String(r.headers.authorization??'').replace(/^Bearer\s+/i,'')); if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); return [...store.photos.values()].filter(p=>p.authorId===u.id).map(p=>({date:p.createdAt.slice(0,10),photo_id:p.id,caption:p.caption,image_url:`/v1/photos/${p.id}/image`})) })
   await app.ready(); return app

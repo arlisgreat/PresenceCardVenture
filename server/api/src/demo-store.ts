@@ -8,6 +8,7 @@ export type Photo = { id: string; authorId: string; filterId: string; playType?:
 export type Message = { id: string; from: string; to: string; text?: string; photoId?: string; createdAt: string }
 export type Job = { id: string; ownerId: string; materialIds: string[]; provider?: string; status: 'queued'|'processing'|'completed'|'failed'; resultPhotoId?: string; error?: string; createdAt: string }
 export type FriendRequest = { id: string; requesterId: string; addresseeId: string; status: 'pending' | 'accepted'; createdAt: string }
+export type DeviceConfig = { id: string; filter_id: string; play_type: string; beauty: number; sticker: string; updated_at: string }
 
 export class DemoStore {
   readonly uploadDailyLimit: number
@@ -19,7 +20,7 @@ export class DemoStore {
   jobs = new Map<string, Job>()
   friendships = new Set<string>()
   friendRequests = new Map<string, FriendRequest>()
-  devices = new Map<string, { userId?: string; token?: string; pairCode?: string; expiresAt?: number; lastSeen?: string }>()
+  devices = new Map<string, { userId?: string; token?: string; pairCode?: string; expiresAt?: number; lastSeen?: string; pendingConfig?: DeviceConfig }>()
 
   constructor(options: { uploadDailyLimit?: number } = {}) {
     this.uploadDailyLimit = Math.max(1, Math.floor(options.uploadDailyLimit ?? Number(process.env.UPLOAD_DAILY_LIMIT ?? 60)))

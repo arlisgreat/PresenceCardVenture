@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getPairStatus, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -107,6 +107,22 @@ test('device feed helper reads the authenticated device feed endpoint', async ()
     const page = await getDeviceFeed('device-token-test', 8)
     assert.equal(page.items[0].photo_id, 'p_device_feed')
     assert.deepEqual(request, { url: '/v1/feed?limit=8', method: 'GET', authorization: 'Bearer device-token-test' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('device config helper queues a selected play for the bound device', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; method?: string; authorization?: string; body?: string } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), method: init?.method, authorization: new Headers(init?.headers).get('Authorization') ?? undefined, body: String(init?.body ?? '') }
+    return new Response(JSON.stringify({ config_id: 'cfg_test', status: 'queued', device_id: 'dvc_test', config: { id: 'cfg_test', filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star', updated_at: '2026-08-28T00:00:00.000Z' } }), { status: 202, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const result = await pushDeviceConfig('dvc_test', { filterId: 'film', playType: 'ccd', beauty: 28, sticker: 'star' })
+    assert.equal(result.config_id, 'cfg_test')
+    assert.deepEqual(request, { url: '/v1/device/config', method: 'POST', authorization: 'Bearer demo-token', body: JSON.stringify({ device_id: 'dvc_test', filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star' }) })
   } finally {
     globalThis.fetch = originalFetch
   }

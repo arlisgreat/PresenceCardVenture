@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
+import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, pushDeviceConfig, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -25,6 +25,7 @@ const filters: Array<{ id: string; name: string; note: string; tone: string; pla
 const circles = ['小圈', '傍晚的天空', '胶片味', '宿舍窗台']
 const DEVICE_ID = 'dvc_a1b2c3d4'
 const DEVICE_DEMO_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+type PlaySelection = { filterId: string; playType: PlayType; beauty: number; sticker: string; name: string }
 
 function formatTime(value: string) {
   const date = new Date(value)
@@ -66,6 +67,7 @@ function App() {
   const [toast, setToast] = useState('')
   const [heartBurst, setHeartBurst] = useState<string | null>(null)
   const [deviceState, setDeviceState] = useState({ unseen_count: 3, pending_friend_requests: 1, server_time: '' })
+  const [selectedConfig, setSelectedConfig] = useState<PlaySelection>({ filterId: 'none', playType: 'beauty', beauty: 42, sticker: 'none', name: '原色' })
 
   useEffect(() => { void getFeed().then(setFeed); void getDeviceState().then(setDeviceState) }, [])
   useEffect(() => { if (!toast) return; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout) }, [toast])
@@ -120,11 +122,11 @@ function App() {
 
         {view === 'feed' && <FeedView feed={visibleFeed} allFeed={feed} circle={circle} onCircle={setCircle} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} onCreate={() => setView('create')} />}
         {view === 'footprint' && <FootprintView feed={feed.filter(item => item.mine)} onDelete={onDelete} />}
-        {view === 'library' && <PlayLibraryView onChoose={message => setToast(message)} />}
+        {view === 'library' && <PlayLibraryView selected={selectedConfig} onChoose={selection => { setSelectedConfig(selection); setToast(`${selection.name} 已准备好，可在设备页下发`) }} />}
         {view === 'create' && <CreateView onPublished={onPublished} onCancel={() => setView('feed')} onToast={setToast} />}
         {view === 'messages' && <MessagesView onToast={setToast} />}
         {view === 'ai' && <AiView feed={feed} onToast={setToast} />}
-        {view === 'device' && <DeviceView state={deviceState} feed={feed} onToast={setToast} />}
+        {view === 'device' && <DeviceView state={deviceState} feed={feed} selectedConfig={selectedConfig} onToast={setToast} />}
       </main>
       {toast && <div className="toast" role="status"><span>✦</span>{toast}</div>}
     </div>
@@ -145,13 +147,13 @@ function FootprintView({ feed, onDelete }: { feed: FeedItem[]; onDelete: (item: 
   return <section className="content-wrap footprint-view"><div className="studio-head"><div><p className="section-kicker">MY TRACE / 我的足迹</p><h2>把释放过的日子，收在这里。</h2><p>每一张照片都保留原图与处理后的样子。</p></div><span className="signal-count">{feed.length} 张照片</span></div><div className="trace-list">{feed.length === 0 ? <div className="empty-state"><span>⌂</span><h2>还没有留下足迹</h2><p>从释放一张照片开始，给今天一个位置。</p></div> : feed.map(item => <div className="trace-row" key={item.id}><div className="trace-date"><b>{new Date(item.created_at).getDate()}</b><span>{new Date(item.created_at).toLocaleDateString('zh-CN', { month: 'short' })}</span></div><div className="trace-photo"><ProtectedImage src={item.image_url} alt={item.caption ?? '我的照片'} /></div><div className="trace-copy"><p className="section-kicker">{item.filter_id.toUpperCase()} · {formatTime(item.created_at)}</p><h3>{item.caption ?? '今天也好好在场。'}</h3><p>已保存原图 · 可见于 {item.circle ?? '小圈'}</p></div><button className="delete-link" onClick={() => onDelete(item)}>移除</button></div>)}</div></section>
 }
 
-function PlayLibraryView({ onChoose }: { onChoose: (message: string) => void }) {
+function PlayLibraryView({ selected, onChoose }: { selected: PlaySelection; onChoose: (selection: PlaySelection) => void }) {
   const groups: Array<{ type: PlayType; title: string; intro: string; color: string; items: typeof filters }> = [
     { type: 'beauty', title: '轻美颜 · 真实向', intro: '把人拍好看，但克制。', color: 'blush', items: filters.filter(item => item.play === 'beauty') },
     { type: 'ccd', title: 'CCD 滤镜', intro: '颗粒、暗角和一点电子乡愁。', color: 'blue', items: filters.filter(item => item.play === 'ccd') },
     { type: 'template', title: '素材模板', intro: '贴纸、边框和手账感的拼贴。', color: 'sage', items: filters.filter(item => item.play === 'template') },
   ]
-  return <section className="content-wrap library-view"><div className="studio-head"><div><p className="section-kicker">PLAY LIBRARY / 玩法库</p><h2>三个房间，三种心情。</h2><p>选中的玩法会作为下一次拍摄和小卡下发的配置。</p></div><span className="consent-badge">云端渲染 · 卡端显示</span></div><div className="library-groups">{groups.map(group => <div className={`library-group ${group.color}`} key={group.type}><div className="library-heading"><span className="play-number">{group.type === 'beauty' ? '01' : group.type === 'ccd' ? '02' : '03'}</span><div><h3>{group.title}</h3><p>{group.intro}</p></div><span className="library-arrow">→</span></div><div className="library-items">{group.items.map(item => <button className="library-item" key={item.id} onClick={() => onChoose(`${item.name} 已标记为小卡下发配置`)}><span className="filter-swatch" /><span><b>{item.name}</b><small>{item.note}</small></span><i>下发 →</i></button>)}</div></div>)}</div></section>
+  return <section className="content-wrap library-view"><div className="studio-head"><div><p className="section-kicker">PLAY LIBRARY / 玩法库</p><h2>三个房间，三种心情。</h2><p>选中的玩法会作为下一次拍摄和小卡下发的配置。</p></div><span className="consent-badge">当前 · {selected.name}</span></div><div className="library-groups">{groups.map(group => <div className={`library-group ${group.color}`} key={group.type}><div className="library-heading"><span className="play-number">{group.type === 'beauty' ? '01' : group.type === 'ccd' ? '02' : '03'}</span><div><h3>{group.title}</h3><p>{group.intro}</p></div><span className="library-arrow">→</span></div><div className="library-items">{group.items.map(item => <button className={selected.filterId === item.id ? 'library-item selected' : 'library-item'} key={item.id} onClick={() => onChoose({ filterId: item.id, playType: item.play, beauty: item.play === 'beauty' ? 42 : 0, sticker: item.play === 'template' ? 'star' : 'none', name: item.name })}><span className="filter-swatch" /><span><b>{item.name}</b><small>{item.note}</small></span><i>{selected.filterId === item.id ? '已选择' : '选择 →'}</i></button>)}</div></div>)}</div></section>
 }
 
 function PhotoCard({ item, burst, onReact, onPoke, onHeartBurst, onDelete }: { item: FeedItem; burst: boolean; onReact: () => void; onPoke: () => void; onHeartBurst: () => void; onDelete: () => void }) {
@@ -231,12 +233,13 @@ function AiView({ feed, onToast }: { feed: FeedItem[]; onToast: (message: string
   return <section className="content-wrap ai-view"><div className="studio-head"><div><p className="section-kicker">AI STUDIO / 合照</p><h2>让两份在场，遇见一次。</h2><p>选择已授权的素材，云端会为你们合成一张新的记忆。</p></div><div className="consent-badge">⌁ 素材已授权</div></div><div className="ai-layout"><div><div className="material-grid">{candidates.map(item => <button key={item.id} className={selected.includes(item.id) ? 'material selected' : 'material'} onClick={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : current.length < 2 ? [...current, item.id] : current)}><ProtectedImage src={item.image_url} alt="可用于合照的照片" /><span>{selected.includes(item.id) ? `0${selected.indexOf(item.id) + 1}` : '＋'}</span><small>{item.author.display_name} · {item.filter_id}</small></button>)}</div><div className="selection-meter"><span>已选素材</span><b>{selected.length} / 2</b><i><em style={{ width: `${selected.length * 50}%` }} /></i></div></div><div className="ai-result"><div className="result-art">{job?.status === 'completed' && job.resultUrl ? <ProtectedImage src={job.resultUrl} alt="AI 合照结果" /> : <><span className="result-symbol">⌁</span><p>{job?.status === 'processing' ? '正在把两份记忆放在一起…' : job?.status === 'queued' ? '已排队，云端马上开始…' : job?.status === 'failed' ? (job.message ?? '合照生成失败，请稍后重试。') : '合照会出现在这里'}</p></>}</div><div className="job-status"><div><span className={job?.status === 'completed' ? 'status-dot done' : job?.status === 'failed' ? 'status-dot failed' : 'status-dot'} /><b>{job?.status === 'completed' ? '合照已生成' : job?.status === 'failed' ? '合照生成失败' : job ? '云端处理中' : '等待选择素材'}</b></div><div className="job-actions"><button className="primary-button" onClick={() => void create()} disabled={job?.status === 'queued' || job?.status === 'processing'}>{job?.status === 'completed' ? '再生成一张' : job?.status === 'failed' ? '重试生成' : '生成合照'}<span>→</span></button>{job?.status === 'completed' && <button className="quiet-button" onClick={() => void removeResult()}>移除结果</button>}</div></div></div></div></section>
 }
 
-function DeviceView({ state, feed, onToast }: { state: { unseen_count: number; pending_friend_requests: number; server_time: string }; feed: FeedItem[]; onToast: (message: string) => void }) {
+function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_count: number; pending_friend_requests: number; server_time: string }; feed: FeedItem[]; selectedConfig: PlaySelection; onToast: (message: string) => void }) {
   const [logs, setLogs] = useState<string[]>(['device boot · CoreS3 Lite', 'GET /v1/device/state · 200', `unseen_count = ${state.unseen_count}`])
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [pairCode, setPairCode] = useState('')
   const [deviceToken, setDeviceToken] = useState('')
   const [devicePhotoUrl, setDevicePhotoUrl] = useState('')
+  const [appliedConfig, setAppliedConfig] = useState<{ id: string; name: string } | null>(null)
   const [pairingBusy, setPairingBusy] = useState(false)
   function log(message: string) { setLogs(current => [`${new Date().toLocaleTimeString('zh-CN', { hour12: false })}  ${message}`, ...current].slice(0, 8)); onToast(message) }
   async function runAction(action: string, message: string) {
@@ -247,6 +250,11 @@ function DeviceView({ state, feed, onToast }: { state: { unseen_count: number; p
         const page = await getDeviceFeed(deviceToken, 8)
         if (page.items[0]?.image_url) setDevicePhotoUrl(page.items[0].image_url)
         log(`GET /v1/feed · 200 · ${page.items.length} items`)
+      } else if (action === 'config') {
+        if (!deviceToken) { onToast('先绑定设备，再下发玩法'); return }
+        const result = await pushDeviceConfig(DEVICE_ID, selectedConfig)
+        setAppliedConfig({ id: result.config_id, name: selectedConfig.name })
+        log(`POST /v1/device/config · 202 · ${selectedConfig.name} queued`)
       } else if (action === 'upload') {
         if (!deviceToken) { onToast('先绑定设备，再模拟拍照上传'); return }
         const result = await uploadDevicePhoto(new Blob([DEVICE_DEMO_JPEG], { type: 'image/jpeg' }), deviceToken, DEVICE_ID, `web-device-${Date.now()}`)
@@ -254,8 +262,9 @@ function DeviceView({ state, feed, onToast }: { state: { unseen_count: number; p
         log(`POST /v1/photos · 201 · ${result.photo_id}`)
       } else if (action === 'ack') {
         if (!deviceToken) { onToast('先绑定设备，再回执轻信号'); return }
-        await deviceAck(deviceToken)
-        log('POST /v1/device/ack · 204 · acknowledged')
+        await deviceAck(deviceToken, appliedConfig?.id)
+        setAppliedConfig(null)
+        log(`POST /v1/device/ack · 204 · ${appliedConfig ? 'config acknowledged' : 'acknowledged'}`)
       } else {
         await new Promise(resolve => window.setTimeout(resolve, 650))
         log(message)
@@ -264,7 +273,7 @@ function DeviceView({ state, feed, onToast }: { state: { unseen_count: number; p
   }
   async function pair() { setPairingBusy(true); try { const result = await requestPairCode(DEVICE_ID); setPairCode(result.pair_code); log(`POST /v1/pair/code · 200 · expires ${result.expires_in}s`) } catch { onToast('配对码暂时无法获取') } finally { setPairingBusy(false) } }
   async function bind() { if (!pairCode) { onToast('先领取设备配对码'); return }; setPairingBusy(true); try { await bindDevice(DEVICE_ID, pairCode); const status = await getPairStatus(DEVICE_ID, pairCode); if (!status.device_token) throw new Error('device token missing'); setDeviceToken(status.device_token); await deviceHeartbeat(status.device_token); log('POST /v1/pair/bind · 200 · device bound · heartbeat 204') } catch { onToast('配对码已过期，请重新领取') } finally { setPairingBusy(false) } }
-  return <section className="content-wrap device-view"><div className="studio-head"><div><p className="section-kicker">DEVICE LAB / 联调</p><h2>小卡，准备好在场。</h2><p>用模拟器验证上传、拉取、下发和轻回应，不需要真实硬件。</p></div><span className="device-pill"><span className="live-dot" /> {DEVICE_ID}</span></div><div className="device-layout"><div className="device-card"><div className="device-screen"><div className="screen-top"><span>小卡 · 01</span><span>Wi-Fi ●</span></div><div className="screen-photo">{devicePhotoUrl || feed[0]?.image_url ? <ProtectedImage src={devicePhotoUrl || feed[0].image_url} alt="设备当前照片" /> : <span>等待照片</span>}</div><div className="screen-bottom"><span>✦ {feed[0]?.reactions.heart ?? 0}</span><span>320 × 240</span></div></div><div className="device-controls"><button disabled={busyAction !== null} onClick={() => void runAction('upload', 'POST /v1/photos · 201 · photo uploaded')}>拍照并上传 <span>{busyAction === 'upload' ? '…' : '↑'}</span></button><button disabled={busyAction !== null} onClick={() => void runAction('feed', `GET /v1/feed · 200 · ${feed.length} items`)}>拉取圈子 <span>{busyAction === 'feed' ? '…' : '↓'}</span></button><button disabled={busyAction !== null} onClick={() => void runAction('ack', 'POST /v1/device/ack · 204 · acknowledged')}>回执轻信号 <span>{busyAction === 'ack' ? '…' : '✦'}</span></button></div></div><div className="device-info"><div className="pairing-panel"><div><p className="panel-label">设备配对</p><small>设备先领码，再由当前账号绑定。</small></div><div className="pairing-actions"><button onClick={() => void pair()} disabled={pairingBusy}>{pairingBusy ? '处理中…' : '领取配对码'}</button><input aria-label="配对码" inputMode="numeric" maxLength={6} value={pairCode} onChange={event => setPairCode(event.target.value.replace(/\D/g, ''))} placeholder="6 位配对码" /><button onClick={() => void bind()} disabled={pairingBusy || pairCode.length !== 6}>绑定</button></div></div><div className="info-row"><span>设备状态</span><b className="green-text">{deviceToken ? '已绑定 · 在线' : '在线 · 未绑定'}</b></div><div className="info-row"><span>未看动态</span><b>{state.unseen_count}</b></div><div className="info-row"><span>待处理好友</span><b>{state.pending_friend_requests}</b></div><div className="info-row"><span>最后同步</span><b>{state.server_time ? formatTime(state.server_time) : '刚刚'}</b></div><div className="log-box"><p>REQUEST LOG</p>{logs.map((log, index) => <code key={`${log}-${index}`}>{log}</code>)}</div></div></div></section>
+  return <section className="content-wrap device-view"><div className="studio-head"><div><p className="section-kicker">DEVICE LAB / 联调</p><h2>小卡，准备好在场。</h2><p>用模拟器验证上传、拉取、下发和轻回应，不需要真实硬件。</p></div><span className="device-pill"><span className="live-dot" /> {DEVICE_ID}</span></div><div className="device-layout"><div className="device-card"><div className="device-screen"><div className="screen-top"><span>小卡 · 01</span><span>Wi-Fi ●</span></div><div className="screen-photo">{devicePhotoUrl || feed[0]?.image_url ? <ProtectedImage src={devicePhotoUrl || feed[0].image_url} alt="设备当前照片" /> : <span>等待照片</span>}</div><div className="screen-bottom"><span>✦ {feed[0]?.reactions.heart ?? 0}</span><span>{appliedConfig?.name ?? '原色'} · 320 × 240</span></div></div><div className="device-controls"><button disabled={busyAction !== null} onClick={() => void runAction('upload', 'POST /v1/photos · 201 · photo uploaded')}>拍照并上传 <span>{busyAction === 'upload' ? '…' : '↑'}</span></button><button disabled={busyAction !== null} onClick={() => void runAction('feed', `GET /v1/feed · 200 · ${feed.length} items`)}>拉取圈子 <span>{busyAction === 'feed' ? '…' : '↓'}</span></button><button disabled={busyAction !== null || !deviceToken} onClick={() => void runAction('config', `POST /v1/device/config · 202 · ${selectedConfig.name} queued`)}>下发玩法 <span>{busyAction === 'config' ? '…' : '⌁'}</span></button><button disabled={busyAction !== null} onClick={() => void runAction('ack', 'POST /v1/device/ack · 204 · acknowledged')}>回执轻信号 <span>{busyAction === 'ack' ? '…' : '✦'}</span></button></div></div><div className="device-info"><div className="pairing-panel"><div><p className="panel-label">设备配对</p><small>设备先领码，再由当前账号绑定。</small></div><div className="pairing-actions"><button onClick={() => void pair()} disabled={pairingBusy}>{pairingBusy ? '处理中…' : '领取配对码'}</button><input aria-label="配对码" inputMode="numeric" maxLength={6} value={pairCode} onChange={event => setPairCode(event.target.value.replace(/\D/g, ''))} placeholder="6 位配对码" /><button onClick={() => void bind()} disabled={pairingBusy || pairCode.length !== 6}>绑定</button></div></div><div className="info-row"><span>设备状态</span><b className="green-text">{deviceToken ? '已绑定 · 在线' : '在线 · 未绑定'}</b></div><div className="info-row"><span>当前玩法</span><b>{appliedConfig?.name ?? selectedConfig.name}</b></div><div className="info-row"><span>未看动态</span><b>{state.unseen_count}</b></div><div className="info-row"><span>待处理好友</span><b>{state.pending_friend_requests}</b></div><div className="info-row"><span>最后同步</span><b>{state.server_time ? formatTime(state.server_time) : '刚刚'}</b></div><div className="log-box"><p>REQUEST LOG</p>{logs.map((log, index) => <code key={`${log}-${index}`}>{log}</code>)}</div></div></div></section>
 }
 
 export default App

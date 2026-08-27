@@ -170,11 +170,29 @@ sequenceDiagram
   "unseen_count": 3,
   "pending_friend_requests": 1,
   "server_time": "2026-08-26T09:31:02Z",
-  "fw_latest": { "version": "0.1.2", "url": "https://.../fw_0.1.2.bin", "md5": "..." }
+  "fw_latest": { "version": "0.1.2", "url": "https://.../fw_0.1.2.bin", "md5": "..." },
+  "pending_config": null
 }
 ```
 - `unseen_count > 0` 才去拉 feed，省电省流量；`= 0` 直接回去睡觉。
 - `fw_latest` 为 OTA 预留，MVP 可忽略。
+- `pending_config` 是 Web 下发且尚未回执的玩法配置；设备应用后在 `POST /device/ack` body 中带上 `config_id`。
+
+### Web 下发玩法配置
+
+设备主人在 Web 端调用 `POST /device/config`，服务端只接受已绑定设备主人提交的配置。设备下一次读取 `/device/state` 即可取得 `pending_config`，成功应用后通过 ack 清除。
+
+```json
+{
+  "device_id": "dvc_a1b2c3d4e5f6",
+  "filter_id": "film",
+  "play_type": "ccd",
+  "beauty": 28,
+  "sticker": "star"
+}
+```
+
+响应为 `202 { config_id, status: "queued", device_id, config }`。同一设备的新配置会覆盖尚未回执的旧配置，避免设备重启后重复应用。
 
 ### 3.2 Feed
 

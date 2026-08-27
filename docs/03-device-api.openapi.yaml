@@ -266,6 +266,43 @@ paths:
                       version: { type: string }
                       url: { type: string }
                       md5: { type: string }
+                  pending_config:
+                    nullable: true
+                    allOf: [{ $ref: "#/components/schemas/DeviceConfig" }]
+
+  /device/config:
+    post:
+      tags: [device]
+      summary: Web 为已绑定设备下发玩法配置
+      description: 由设备主人在 Web 端调用；设备下一次读取 `/device/state` 时取得 pending_config。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id, filter_id, play_type]
+              properties:
+                device_id: { type: string }
+                filter_id: { type: string, enum: [none, warm, bw, film, vivid] }
+                play_type: { type: string, enum: [beauty, ccd, template] }
+                beauty: { type: integer, minimum: 0, maximum: 100, default: 0 }
+                sticker: { type: string, enum: [none, star, date], default: none }
+      responses:
+        "202":
+          description: 配置已排队
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  config_id: { type: string }
+                  status: { type: string, example: queued }
+                  device_id: { type: string }
+                  config: { $ref: "#/components/schemas/DeviceConfig" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /device/heartbeat:
     post:
@@ -289,6 +326,13 @@ paths:
       tags: [device]
       summary: 回执轻信号
       description: 设备确认已处理下发的动态或反应；需要 device_token。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config_id: { type: string, description: 已处理的玩法配置 ID，可选 }
       responses:
         "204": { description: 已接收 }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -350,6 +394,17 @@ components:
         next_cursor: { type: string, nullable: true }
         etag: { type: string }
 
+    DeviceConfig:
+      type: object
+      required: [id, filter_id, play_type, beauty, sticker, updated_at]
+      properties:
+        id: { type: string, example: cfg_01J8XYZ }
+        filter_id: { type: string, enum: [none, warm, bw, film, vivid] }
+        play_type: { type: string, enum: [beauty, ccd, template] }
+        beauty: { type: integer, minimum: 0, maximum: 100 }
+        sticker: { type: string, enum: [none, star, date] }
+        updated_at: { type: string, format: date-time }
+
   responses:
     Unauthorized:
       description: "token 无效/被解绑 → 清 NVS token，回配对流程"
@@ -363,6 +418,21 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     StorageUnavailable:
       description: "图片存储暂不可用；请求未完成，稍后重试"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: 请求参数不合法
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: 当前账号无权操作该设备
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: 设备不存在或尚未绑定
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
