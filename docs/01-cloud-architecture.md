@@ -26,6 +26,7 @@
 - `GET /health/ready` 是就绪探针；开发模式返回 `200` 并标注 `mode=demo`。
 - 生产启动时设置 `REQUIRE_PRODUCTION_SERVICES=true`（或 `NODE_ENV=production`），就绪探针会要求 `DATABASE_URL`、`OSS_BUCKET`（或 `OBJECT_STORAGE_BUCKET`）和非模拟的 `AI_PROVIDER`，缺项返回 `503`，避免误把 DemoStore 部署为生产服务。
 - Caddy 在 `APP_DOMAIN` 下将 `/v1/*` 同域反代到 API，并为 React Router 路径回退到 `index.html`；这样 Web 的相对 API 地址在开发和生产都保持一致。
+- Compose 的 `deploy/.env` 同时注入 API 与 PostgreSQL；容器内 `DATABASE_URL` 必须使用 `db` 主机名，不能照搬本机 `localhost` 配置。
 
 AI 合照任务只依赖 provider 契约：provider 返回 `completed`、`failed` 及结果照片 id，路由负责授权、排队状态和错误持久化。模拟器会返回第一张已授权素材作为可重复预览，不代表真实生图；接入第三方模型时通过 `buildApp({ aiProvider })` 注入，不改 Web 或设备 API。
 
