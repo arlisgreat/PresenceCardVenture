@@ -23,7 +23,14 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const id = `p_${randomUUID()}`; const p = { id, authorId: u.id, filterId: String(r.headers['x-filter-id'] ?? 'none'), playType: String(r.headers['x-play-type'] ?? 'ccd'), beauty: Number(r.headers['x-beauty'] ?? 0), sticker: String(r.headers['x-sticker'] ?? 'none'), caption: r.headers['x-caption'] ? decodeURIComponent(String(r.headers['x-caption'])) : null, circle: String(r.headers['x-circle'] ?? '小圈'), width: Number(r.headers['x-width'] ?? 320), height: Number(r.headers['x-height'] ?? 240), createdAt: new Date().toISOString(), original: body, processed: body, idempotencyKey: idem, deviceId }
     store.photos.set(id, p); await files.save(p); return reply.code(201).send(uploadResult(p, store))
   })
-  app.get('/photos/:id/image', async (r, reply) => { const p = store.photos.get((r.params as any).id); if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found')); reply.header('cache-control','public, max-age=31536000, immutable').type('image/jpeg').send(p.processed) })
+  app.get('/photos/:id/image', async (r, reply) => {
+    const u = user(r, store)
+    const p = store.photos.get((r.params as any).id)
+    if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
+    if (!p) return reply.code(404).send(errorBody('NOT_FOUND', 'photo not found'))
+    if (!store.isFriend(u.id, p.authorId)) return reply.code(403).send(errorBody('FORBIDDEN', 'photo is not visible to this user'))
+    return reply.header('cache-control', 'private, max-age=31536000, immutable').type('image/jpeg').send(p.processed)
+  })
   const feed = async (r: FastifyRequest, reply: any, mine = false) => { const u = user(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); const photos = (mine ? [...store.photos.values()].filter(p=>p.authorId===u.id) : store.visiblePhotos(u.id)); const etag = `W/\"feed-${photos.map(p=>p.id).join('-')}\"`; if (r.headers['if-none-match'] === etag) return reply.code(304).send(); return reply.send({ items: photos.slice(0, Number((r.query as any)?.limit ?? 8)).map(p=>item(p, u.id, store)), next_cursor: null, etag }) }
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
   app.delete('/photos/:id', async (r, reply) => { const u = user(r, store), p = store.photos.get((r.params as any).id); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found')); if (p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN','not owner')); store.photos.delete(p.id); await files.remove(p); return reply.code(204).send() })

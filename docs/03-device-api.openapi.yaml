@@ -122,11 +122,17 @@ paths:
         - { name: size, in: query, required: false, schema: { type: integer, default: 320 }, description: "预留，MVP 仅一档" }
       responses:
         "200":
-          description: "JPEG 字节流（Cache-Control: immutable）"
+          description: "JPEG 字节流（需认证且通过好友可见性校验，Cache-Control: private immutable）"
           content:
             image/jpeg:
               schema: { type: string, format: binary }
         "404":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: 无权查看该照片
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

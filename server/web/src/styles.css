@@ -72,6 +72,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .photo-card { min-width: 0; }
 .photo-frame { position: relative; aspect-ratio: 4 / 4.9; overflow: hidden; background: var(--mist); border: 1px solid var(--hair); }
 .photo-frame img { width: 100%; height: 100%; display: block; object-fit: cover; transition: transform .6s ease; }
+.photo-frame .image-placeholder { width: 100%; height: 100%; display: block; background: var(--mist); }
 .photo-card:hover .photo-frame img { transform: scale(1.025); }
 .photo-frame { transition: border-color .25s, box-shadow .25s; }
 .photo-frame:focus-within, .photo-frame:active { border-color: var(--blush-d); }
@@ -104,6 +105,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .trace-date span { color: var(--muted); font-size: 10px; }
 .trace-photo { width: 112px; aspect-ratio: 1 / 1.12; overflow: hidden; background: var(--mist); }
 .trace-photo img { width: 100%; height: 100%; object-fit: cover; }
+.trace-photo .image-placeholder { width: 100%; height: 100%; display: block; background: var(--mist); }
 .trace-copy h3 { margin: 8px 0 5px; font: 600 16px 'Noto Serif SC', serif; }
 .trace-copy > p:last-child { margin: 0; color: var(--muted); font-size: 10px; }
 
@@ -208,6 +210,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .bubble p { margin: 0; font: 13px/1.75 'Noto Serif SC', serif; }
 .bubble small { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; }
 .message-image { display: block; width: min(220px, 100%); max-height: 260px; object-fit: cover; margin: -2px -2px 6px; border: 1px solid rgba(255,255,255,.7); }
+.message-image.image-placeholder { min-height: 120px; background: rgba(255,255,255,.2); }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 .message-compose { display: flex; gap: 8px; margin: 0 17px 17px; padding: 8px; border: 1px solid var(--hair); background: rgba(255,255,255,.75); }
 .message-compose button { border: 0; background: transparent; color: var(--muted); font-size: 19px; min-width: 26px; }
@@ -219,6 +222,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .material-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .material { position: relative; min-width: 0; padding: 0; border: 1px solid var(--hair); background: white; text-align: left; overflow: hidden; }
 .material img { width: 100%; display: block; aspect-ratio: 1 / 1.08; object-fit: cover; }
+.material .image-placeholder { width: 100%; display: block; aspect-ratio: 1 / 1.08; background: var(--mist); }
 .material > span { position: absolute; top: 10px; right: 10px; width: 25px; height: 25px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(255,253,251,.85); color: var(--muted); font-size: 12px; }
 .material.selected { border: 2px solid var(--blush-d); }
 .material.selected > span { background: var(--blush-d); color: white; }
@@ -245,6 +249,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .screen-top, .screen-bottom { display: flex; justify-content: space-between; color: #b8cebd; font: 10px/1.4 monospace; letter-spacing: .05em; }
 .screen-photo { margin: 10px 0; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #d5dfd2; color: #66816b; font: 14px 'Noto Serif SC', serif; }
 .screen-photo img { width: 100%; height: 100%; object-fit: cover; filter: saturate(.8) sepia(.12); }
+.screen-photo .image-placeholder { width: 100%; height: 100%; display: block; background: #d5dfd2; }
 .device-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 18px; }
 .device-controls button { min-height: 58px; border: 1px solid var(--hair); background: white; color: var(--ink); font-size: 10px; transition: background .2s, border-color .2s, color .2s; }
 .device-controls button:hover:not(:disabled) { border-color: var(--mist-d); background: var(--mist); }

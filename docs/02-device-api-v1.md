@@ -206,7 +206,10 @@ sequenceDiagram
 
 `GET /photos/{photo_id}/image`（`?size=320` 预留，MVP 只有一档）
 
-- 响应：`200`，`Content-Type: image/jpeg`，`Cache-Control: public, max-age=31536000, immutable`
+- 必须携带有效的 `Authorization: Bearer <device_token>`（Web 端使用用户登录 token）。
+- 服务端会再次校验照片是否属于自己或已授权好友；未授权返回 `403 FORBIDDEN`，不依赖客户端隐藏 URL。
+
+- 响应：`200`，`Content-Type: image/jpeg`，`Cache-Control: private, max-age=31536000, immutable`
 - 下载到 PSRAM → JPEG 解码 RGB565（推荐 TJpg_Decoder）→ 刷屏。
 - 建议在 flash 缓存最近 8 张好友照片（文件名 = photo_id），**离线也能翻看**。
 

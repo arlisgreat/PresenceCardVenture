@@ -22,7 +22,7 @@ test('uploads jpeg, supports idempotent retry, and serves image', async () => {
   const retry = await app.inject({ method: 'POST', url: '/v1/photos', headers, payload: jpeg })
   assert.equal(retry.statusCode, 200)
   assert.equal(retry.json().photo_id, first.json().photo_id)
-  const image = await app.inject({ method: 'GET', url: `/v1/photos/${first.json().photo_id}/image` })
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${first.json().photo_id}/image`, headers: { authorization: 'Bearer demo-token' } })
   assert.equal(image.statusCode, 200)
   assert.equal(image.headers['content-type'], 'image/jpeg')
   const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: { authorization: 'Bearer demo-token' } })
@@ -63,5 +63,22 @@ test('only owner can delete photos', async () => {
   assert.equal(other.statusCode, 403)
   const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${created.json().photo_id}`, headers: { authorization: 'Bearer demo-token' } })
   assert.equal(deleted.statusCode, 204)
+  await app.close()
+})
+
+test('photo downloads require authentication and an authorized relationship', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-visibility' })
+  const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: { authorization: 'Bearer demo-token' } })
+  const lunaPhoto = feed.json().items.find((item: any) => item.author.username === 'luna').photo_id
+
+  const anonymous = await app.inject({ method: 'GET', url: `/v1/photos/${lunaPhoto}/image` })
+  assert.equal(anonymous.statusCode, 401)
+
+  const unrelated = await app.inject({ method: 'GET', url: `/v1/photos/${lunaPhoto}/image`, headers: { authorization: 'Bearer demo-user-2' } })
+  assert.equal(unrelated.statusCode, 403)
+
+  const authorized = await app.inject({ method: 'GET', url: `/v1/photos/${lunaPhoto}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(authorized.statusCode, 200)
+  assert.equal(authorized.headers['content-type'], 'image/jpeg')
   await app.close()
 })
