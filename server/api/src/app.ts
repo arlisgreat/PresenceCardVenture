@@ -6,8 +6,8 @@ import { photoRoutes } from './routes/photos.js'
 import { socialRoutes } from './routes/social.js'
 import { aiRoutes } from './routes/ai.js'
 
-export async function buildApp(options: { uploadsDir?: string; store?: DemoStore } = {}): Promise<FastifyInstance> {
-  const store = options.store ?? new DemoStore(); const files = new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
+export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; uploadDailyLimit?: number } = {}): Promise<FastifyInstance> {
+  const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const files = new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 })
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer' }, (_req, body, done) => done(null, body))
   app.setErrorHandler((err, _req, reply) => { const code=(err as any).code; if (code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send(errorBody('PHOTO_TOO_LARGE','image exceeds 1048576 bytes')); if (code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send(errorBody('BAD_CONTENT_TYPE','JPEG required')); reply.send(err) })

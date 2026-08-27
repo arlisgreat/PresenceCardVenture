@@ -43,6 +43,18 @@ test('rejects oversized and non-jpeg uploads', async () => {
   await app.close()
 })
 
+test('enforces the per-device daily upload limit', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-limit', uploadDailyLimit: 1 })
+  const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }
+  const first = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'limit-1' }, payload: jpeg })
+  assert.equal(first.statusCode, 201)
+  const limited = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'limit-2' }, payload: jpeg })
+  assert.equal(limited.statusCode, 429)
+  assert.equal(limited.json().error.code, 'RATE_LIMITED')
+  assert.ok(limited.json().retry_after > 0)
+  await app.close()
+})
+
 test('only owner can delete photos', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-3' })
   const headers = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'delete-k', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }

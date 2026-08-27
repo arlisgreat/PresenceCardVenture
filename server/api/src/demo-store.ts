@@ -10,6 +10,7 @@ export type Job = { id: string; ownerId: string; materialIds: string[]; status: 
 export type FriendRequest = { id: string; requesterId: string; addresseeId: string; status: 'pending' | 'accepted'; createdAt: string }
 
 export class DemoStore {
+  readonly uploadDailyLimit: number
   users = new Map<string, User>()
   tokens = new Map<string, string>()
   photos = new Map<string, Photo>()
@@ -20,7 +21,8 @@ export class DemoStore {
   friendRequests = new Map<string, FriendRequest>()
   devices = new Map<string, { userId?: string; token?: string; pairCode?: string; expiresAt?: number; lastSeen?: string }>()
 
-  constructor() {
+  constructor(options: { uploadDailyLimit?: number } = {}) {
+    this.uploadDailyLimit = Math.max(1, Math.floor(options.uploadDailyLimit ?? Number(process.env.UPLOAD_DAILY_LIMIT ?? 60)))
     const u1 = { id: 'u_demo_1', username: 'ayan', displayName: '阿岩', friendCode: '100001' }
     const u2 = { id: 'u_demo_2', username: 'momo', displayName: '墨墨', friendCode: '100002' }
     const u3 = { id: 'u_demo_3', username: 'luna', displayName: '露娜', friendCode: '100003' }
@@ -36,6 +38,10 @@ export class DemoStore {
   }
   userForToken(token?: string) { return token ? this.users.get(this.tokens.get(token) ?? '') : undefined }
   user(id: string) { return this.users.get(id) }
+  dailyUploadCount(authorId: string, deviceId: string, now = Date.now()) {
+    const day = new Date(now).toISOString().slice(0, 10)
+    return [...this.photos.values()].filter(photo => photo.authorId === authorId && photo.deviceId === deviceId && photo.createdAt.slice(0, 10) === day).length
+  }
   isFriend(a: string, b: string) { return a === b || this.friendships.has(`${a}:${b}`) }
   visiblePhotos(userId: string) { return [...this.photos.values()].filter(p => this.isFriend(userId, p.authorId)).sort((a,b) => b.createdAt.localeCompare(a.createdAt)) }
   reactionsFor(photoId: string) {
