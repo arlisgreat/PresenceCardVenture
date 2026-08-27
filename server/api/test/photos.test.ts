@@ -43,6 +43,21 @@ test('rejects oversized and non-jpeg uploads', async () => {
   await app.close()
 })
 
+test('validates photo metadata without turning malformed headers into server errors', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata' })
+  const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '320', 'x-height': '240' }
+  const malformedCaption = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'metadata-1', 'x-caption': '%E0%A4%A' }, payload: jpeg })
+  assert.equal(malformedCaption.statusCode, 400)
+  assert.equal(malformedCaption.json().error.code, 'BAD_REQUEST')
+
+  const longCaption = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'metadata-2', 'x-caption': encodeURIComponent('a'.repeat(141)) }, payload: jpeg })
+  assert.equal(longCaption.statusCode, 400)
+
+  const invalidDimensions = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'metadata-3', 'x-width': '0' }, payload: jpeg })
+  assert.equal(invalidDimensions.statusCode, 400)
+  await app.close()
+})
+
 test('enforces the per-device daily upload limit', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-limit', uploadDailyLimit: 1 })
   const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }

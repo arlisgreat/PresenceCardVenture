@@ -151,6 +151,7 @@ sequenceDiagram
 
 > **幂等语义**：服务器对 `(device_id, Idempotency-Key)` 去重。同键重试返回 `200` + 首次的响应体（不是 201），照片只存一份。断网重传、用户连按，都不会产生重复照片。
 > **限额**：60 张/天/设备，超出 `429` + `retry_after`。
+> **元数据校验**：`X-Caption` 必须是 URL-encode 的 UTF-8 且不超过 140 字符；`X-Width`/`X-Height` 为 1–8192 的整数；非法值返回 `400 BAD_REQUEST`，不会写入文件。
 
 ---
 
