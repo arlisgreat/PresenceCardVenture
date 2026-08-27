@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, getAiJob, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -83,4 +83,15 @@ test('AI helpers propagate provider errors instead of returning fake success', a
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('feed circle filtering keeps all view broad and named circles exact', () => {
+  const feed = [
+    { id: 'small', circle: '小圈' },
+    { id: 'sky', circle: '傍晚的天空' },
+    { id: 'film', circle: '胶片味' },
+  ] as any[]
+  assert.deepEqual(filterFeedByCircle(feed, '全部').map(item => item.id), ['small', 'sky', 'film'])
+  assert.deepEqual(filterFeedByCircle(feed, '傍晚的天空').map(item => item.id), ['sky'])
+  assert.deepEqual(filterFeedByCircle(feed, '小圈').map(item => item.id), ['small'])
 })

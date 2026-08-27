@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, getAiJob, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
+import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -62,7 +62,7 @@ function ProtectedImage({ src, alt, className }: { src: string; alt: string; cla
 function App() {
   const [view, setView] = useState<View>('feed')
   const [feed, setFeed] = useState<FeedItem[]>([])
-  const [circle, setCircle] = useState('小圈')
+  const [circle, setCircle] = useState('全部')
   const [toast, setToast] = useState('')
   const [heartBurst, setHeartBurst] = useState<string | null>(null)
   const [deviceState, setDeviceState] = useState({ unseen_count: 3, pending_friend_requests: 1, server_time: '' })
@@ -70,7 +70,7 @@ function App() {
   useEffect(() => { void getFeed().then(setFeed); void getDeviceState().then(setDeviceState) }, [])
   useEffect(() => { if (!toast) return; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout) }, [toast])
 
-  const visibleFeed = useMemo(() => circle === '小圈' ? feed : feed.filter(item => item.circle === circle || item.circle === '小圈'), [circle, feed])
+  const visibleFeed = useMemo(() => filterFeedByCircle(feed, circle), [circle, feed])
 
   async function onReact(item: FeedItem) {
     const active = !(item.my_reactions ?? []).includes('heart')
@@ -118,7 +118,7 @@ function App() {
           <div className="top-actions"><span className="live-dot" /> <span className="top-date">2026.08.28</span><button className="text-button" onClick={() => setView('device')}>设备 {deviceState.unseen_count}</button></div>
         </header>
 
-        {view === 'feed' && <FeedView feed={visibleFeed} circle={circle} onCircle={setCircle} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} onCreate={() => setView('create')} />}
+        {view === 'feed' && <FeedView feed={visibleFeed} allFeed={feed} circle={circle} onCircle={setCircle} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} onCreate={() => setView('create')} />}
         {view === 'footprint' && <FootprintView feed={feed.filter(item => item.mine)} onDelete={onDelete} />}
         {view === 'library' && <PlayLibraryView onChoose={message => setToast(message)} />}
         {view === 'create' && <CreateView onPublished={onPublished} onCancel={() => setView('feed')} onToast={setToast} />}
@@ -131,10 +131,11 @@ function App() {
   )
 }
 
-function FeedView({ feed, circle, onCircle, onReact, onPoke, onHeartBurst, heartBurst, onDelete, onCreate }: { feed: FeedItem[]; circle: string; onCircle: (value: string) => void; onReact: (item: FeedItem) => void; onPoke: (item: FeedItem) => void; onHeartBurst: (item: FeedItem) => void; heartBurst: string | null; onDelete: (item: FeedItem) => void; onCreate: () => void }) {
+function FeedView({ feed, allFeed, circle, onCircle, onReact, onPoke, onHeartBurst, heartBurst, onDelete, onCreate }: { feed: FeedItem[]; allFeed: FeedItem[]; circle: string; onCircle: (value: string) => void; onReact: (item: FeedItem) => void; onPoke: (item: FeedItem) => void; onHeartBurst: (item: FeedItem) => void; heartBurst: string | null; onDelete: (item: FeedItem) => void; onCreate: () => void }) {
+  const feedCircles = ['全部', ...circles]
   return <section className="content-wrap feed-view">
     <div className="feed-intro"><div><p className="section-kicker">CIRCLE / 朋友的小圈</p><p className="intro-copy">没有推送，只有刚好想起你的人。</p></div><button className="primary-button" onClick={onCreate}><span>＋</span>释放一张</button></div>
-    <div className="circle-tabs">{circles.map(item => <button key={item} className={item === circle ? 'circle-tab selected' : 'circle-tab'} onClick={() => onCircle(item)}>{item}<span>{item === '小圈' ? '04' : '12'}</span></button>)}</div>
+    <div className="circle-tabs">{feedCircles.map(item => <button key={item} className={item === circle ? 'circle-tab selected' : 'circle-tab'} onClick={() => onCircle(item)}>{item}<span>{String(item === '全部' ? allFeed.length : allFeed.filter(entry => entry.circle === item).length).padStart(2, '0')}</span></button>)}</div>
     <div className="feed-grid">{feed.length === 0 ? <div className="empty-state"><span>◌</span><h2>圈子还在等第一张照片</h2><p>释放今天的一个瞬间，朋友会在这里遇见它。</p></div> : feed.map(item => <PhotoCard key={item.id} item={item} burst={heartBurst === item.id} onReact={() => onReact(item)} onPoke={() => onPoke(item)} onHeartBurst={() => onHeartBurst(item)} onDelete={() => onDelete(item)} />)}</div>
     <div className="feed-footer"><span>—</span> 今天的在场，到这里刚刚好 <span>—</span></div>
   </section>
