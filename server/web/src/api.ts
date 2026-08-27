@@ -150,6 +150,29 @@ export async function uploadPhoto(file: File, options: { filterId: string; capti
   }
 }
 
+export type DevicePhotoUploadResult = { photo_id: string; url?: string; created_at?: string; daily_remaining?: number }
+
+export async function uploadDevicePhoto(payload: Blob, deviceToken: string, deviceId: string, idempotencyKey: string): Promise<DevicePhotoUploadResult> {
+  const response = await fetch(`${API}/photos`, {
+    method: 'POST',
+    body: payload,
+    headers: {
+      Authorization: `Bearer ${deviceToken}`,
+      'Content-Type': 'image/jpeg',
+      'Idempotency-Key': idempotencyKey,
+      'X-Device-ID': deviceId,
+      'X-Filter-Id': 'none',
+      'X-Play-Type': 'beauty',
+      'X-Beauty': '0',
+      'X-Sticker': 'none',
+      'X-Width': '320',
+      'X-Height': '240',
+    },
+  })
+  if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`)
+  return response.json() as Promise<DevicePhotoUploadResult>
+}
+
 export async function reactToPhoto(id: string, active: boolean): Promise<void> {
   try {
     if (active) await request(`/photos/${id}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'heart' }) })
