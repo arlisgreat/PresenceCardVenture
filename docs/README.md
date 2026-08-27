@@ -8,6 +8,7 @@
 
 | 文件 | 内容 | 谁必读 |
 |------|------|--------|
+| [05-team-roles.md](05-team-roles.md) | **当前 MVP 分工（简版）**：五个角色的主责、交付与共同验收 | **全员先读** |
 | `00-project-plan.md` | 分工、关键路径（ICP 备案）、五周计划、风险登记 | 全员 |
 | `01-cloud-architecture.md` | 阿里云架构、数据模型（Prisma 实现在 `server/api/prisma/`）、成本、运维基线 | 全栈 |
 | `02-device-api-v1.md` | **设备端 API 权威规范** + 固件实现 checklist + 验收用例 | 硬件、全栈 |

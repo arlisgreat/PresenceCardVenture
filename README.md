@@ -1,6 +1,8 @@
 # PresenceCardVenture · 小卡
 
-拍照小卡（ESP32-S3）+ 贴贴风云端社区。MVP 目标：100 用户，5 周。
+拍照小卡（M5Stack CoreS3 Lite）+ 贴贴风云端社区。当前 MVP：1 张展示小卡，至少 200 位用户可扫码参与 Web 社区。
+
+**团队先读：[MVP 分工（简版）](docs/05-team-roles.md)** —— 全栈 / 硬件 / 算法 / UI / CEO 的主责、交付物与共同验收。
 
 > **规则第一条**：`docs/03-device-api.openapi.yaml` 是固件 / 后端 / web 三方**唯一接口契约**。
 > 改契约 = 先提修改契约的 PR → 相关双方 review → 同步 `docs/02-device-api-v1.md` → merge。没有例外。
@@ -45,4 +47,4 @@ cd server/deploy && cp .env.example .env && docker compose up -d
 
 ## 文档索引（docs/）
 
-00 总体规划 · 01 云端架构 · 02 设备 API 权威规范 · 03 OpenAPI 契约 · 04 kickoff 作战手册
+00 总体规划 · 01 云端架构 · 02 设备 API 权威规范 · 03 OpenAPI 契约 · 04 kickoff 作战手册 · [05 当前 MVP 分工](docs/05-team-roles.md)
