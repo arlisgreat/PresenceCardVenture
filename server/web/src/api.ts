@@ -262,13 +262,18 @@ export async function getDeviceStateForToken(deviceToken: string): Promise<Devic
   return requestWithToken<DeviceState>('/device/state', deviceToken, { method: 'GET' })
 }
 
-export type DeviceFeedPage = { items: FeedItem[]; next_cursor?: string | null; etag?: string }
+export type DeviceFeedPage = { items: FeedItem[]; next_cursor?: string | null; etag?: string; not_modified?: boolean }
 export type DeviceConfig = { id: string; filter_id: string; play_type: PlayType; beauty: number; sticker: string; updated_at: string }
 
-export async function getDeviceFeed(deviceToken: string, limit = 8): Promise<DeviceFeedPage> {
+export async function getDeviceFeed(deviceToken: string, limit = 8, etag?: string): Promise<DeviceFeedPage> {
   const boundedLimit = Math.max(1, Math.min(32, Math.floor(limit)))
-  const response = await requestWithToken<DeviceFeedPage>(`/feed?limit=${boundedLimit}`, deviceToken, { method: 'GET' })
-  return { ...response, items: (response.items ?? []).map(item => ({ ...item, id: item.id ?? item.photo_id ?? `device-${item.created_at}` })) }
+  const headers: Record<string, string> = { Authorization: `Bearer ${deviceToken}` }
+  if (etag) headers['If-None-Match'] = etag
+  const response = await fetch(`${API}/feed?limit=${boundedLimit}`, { method: 'GET', headers })
+  if (response.status === 304) return { items: [], next_cursor: null, etag: response.headers.get('ETag') ?? etag, not_modified: true }
+  if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`)
+  const data = await response.json() as DeviceFeedPage
+  return { ...data, etag: response.headers.get('ETag') ?? data.etag, items: (data.items ?? []).map(item => ({ ...item, id: item.id ?? item.photo_id ?? `device-${item.created_at}` })) }
 }
 
 export async function pushDeviceConfig(deviceId: string, config: { filterId: string; playType: PlayType; beauty: number; sticker: string }): Promise<{ config_id: string; status: 'queued'; device_id: string; config: DeviceConfig }> {

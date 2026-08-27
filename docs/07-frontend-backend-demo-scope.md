@@ -67,7 +67,7 @@
 - Web 发布处理：浏览器在上传前使用 Canvas 将 JPG/PNG 缩放到最长边 1600px，并把选中的 CCD/暖色/鲜明/黑白滤镜、美颜亮度和星星/日期贴纸烘焙到 JPEG；API 接收处理后的实际宽高，同时继续保存处理结果元数据。浏览器不支持 Canvas 解码时保留原文件作为兼容降级。
 - 会话隔离：`GET /v1/conversations/:id/messages` 只返回该会话双方的消息；无权或不存在的会话返回 `404`，不会泄露其他好友内容。
 - 设备配对安全：配对码使用密码学随机的 6 位数字，并避免与当前未过期设备码重复；示例中的 `482913` 不会作为固定值返回。
-- 设备模拟器联调：Web 绑定配对码后会查询 `/pair/status` 取得设备 token，并真实调用 `/device/heartbeat`；“拉取圈子”使用设备 token 请求 `/feed?limit=8`，将最新照片更新到设备预览并记录返回条数；“回执轻信号”使用设备 token 调用 `/device/ack`。未绑定时不会伪造成功回执。
+- 设备模拟器联调：Web 绑定配对码后会查询 `/pair/status` 取得设备 token，并真实调用 `/device/heartbeat`；“拉取圈子”使用设备 token 请求 `/feed?limit=8`，保存 ETag 并在后续请求带 `If-None-Match`，命中 `304` 时保留当前预览；有新内容时更新最新照片并记录返回条数；“回执轻信号”使用设备 token 调用 `/device/ack`。未绑定时不会伪造成功回执。
 - 玩法配置下发：玩法库选择会保存当前配置；绑定设备后，Device Lab 的“下发玩法”调用 `/device/config` 排队配置，并用 device token 读取 `/device/state` 确认 `pending_config`；小卡应用后以 `config_id` 回执确认。
 - 设备拍照模拟：Device Lab 的“拍照并上传”会用内置 JPEG 帧调用 `/photos`，带上设备 token、`X-Device-ID` 和幂等键；返回的照片会立即显示在设备屏幕预览中。真实相机帧仍由 ESP32 固件替换。
 - Feed 分页边界：`GET /feed` 和 `GET /photos/mine` 对 `limit` 强制使用正整数，超过 32 时按 32 返回，非法值返回 `400 BAD_REQUEST`，避免设备和 Web 获得不确定页大小。

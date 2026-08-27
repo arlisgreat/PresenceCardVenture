@@ -143,3 +143,22 @@ test('device state helper reads pending config with the device token', async () 
     globalThis.fetch = originalFetch
   }
 })
+
+test('device feed helper treats a matching etag as a cache hit', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; headers: Headers } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), headers: new Headers(init?.headers) }
+    return new Response(null, { status: 304, headers: { ETag: 'W/"feed-cached"' } })
+  }) as typeof fetch
+  try {
+    const page = await getDeviceFeed('device-token-test', 8, 'W/"feed-cached"')
+    assert.equal(page.not_modified, true)
+    assert.equal(page.etag, 'W/"feed-cached"')
+    assert.equal(page.items.length, 0)
+    assert.equal(request?.headers.get('If-None-Match'), 'W/"feed-cached"')
+    assert.equal(request?.headers.get('Authorization'), 'Bearer device-token-test')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

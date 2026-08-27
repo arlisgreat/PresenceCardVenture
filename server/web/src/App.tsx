@@ -239,6 +239,7 @@ function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_
   const [pairCode, setPairCode] = useState('')
   const [deviceToken, setDeviceToken] = useState('')
   const [devicePhotoUrl, setDevicePhotoUrl] = useState('')
+  const [deviceFeedEtag, setDeviceFeedEtag] = useState('')
   const [appliedConfig, setAppliedConfig] = useState<{ id: string; name: string } | null>(null)
   const [pairingBusy, setPairingBusy] = useState(false)
   function log(message: string) { setLogs(current => [`${new Date().toLocaleTimeString('zh-CN', { hour12: false })}  ${message}`, ...current].slice(0, 8)); onToast(message) }
@@ -247,9 +248,10 @@ function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_
     try {
       if (action === 'feed') {
         if (!deviceToken) { onToast('先绑定设备，再拉取圈子'); return }
-        const page = await getDeviceFeed(deviceToken, 8)
+        const page = await getDeviceFeed(deviceToken, 8, deviceFeedEtag || undefined)
+        if (page.etag) setDeviceFeedEtag(page.etag)
         if (page.items[0]?.image_url) setDevicePhotoUrl(page.items[0].image_url)
-        log(`GET /v1/feed · 200 · ${page.items.length} items`)
+        log(page.not_modified ? 'GET /v1/feed · 304 · unchanged' : `GET /v1/feed · 200 · ${page.items.length} items`)
       } else if (action === 'config') {
         if (!deviceToken) { onToast('先绑定设备，再下发玩法'); return }
         const result = await pushDeviceConfig(DEVICE_ID, selectedConfig)
