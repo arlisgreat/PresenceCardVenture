@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['server/**']
   push:
-    branches: [main]
+    branches: [main, 'codex/**']
     paths: ['server/**']
 
 jobs:
@@ -18,6 +18,8 @@ jobs:
           cache: npm
           cache-dependency-path: server/api/package-lock.json
       - run: npm ci
+      - name: API 测试
+        run: npm test
       - name: Prisma schema 校验
         run: npx prisma validate
         env:
