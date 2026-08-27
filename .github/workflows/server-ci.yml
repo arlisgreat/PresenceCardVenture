@@ -18,7 +18,11 @@ jobs:
           cache: npm
           cache-dependency-path: server/api/package-lock.json
       - run: npm ci
-      - run: npx prisma validate
+      - name: Prisma schema 校验
+        run: npx prisma validate
+        env:
+          # validate 只需要占位值，不连真实数据库
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/presence
       - run: npm run build
 
   web-build:
