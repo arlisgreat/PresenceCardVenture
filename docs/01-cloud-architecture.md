@@ -9,7 +9,7 @@
 | 数据库 | PostgreSQL；结构以 [schema.prisma](../server/api/prisma/schema.prisma) 为准 |
 | 图片 | 阿里云 OSS 私有桶；鉴权后访问 |
 | 部署 | Docker Compose + Caddy；`server/deploy/` |
-| 图像处理 | 算法模块；`server/effects/`（待建） |
+| 图像处理 | 当前 Demo 使用本地可替换处理；生产接入算法服务适配器（`server/effects/`） |
 
 - 开发、生产环境分离；交付 Web/API 地址、联调账号及配置模板。
 - 上线前确认域名与 HTTPS；密钥仅在服务端注入。
@@ -17,4 +17,4 @@
 - 全栈交付日志、限流、每日备份、恢复步骤和压测报告。
 - 算法交付效果配置、调用样例、超时/失败处理约定及成本评测。
 
-当前业务接口待实现；数据模型、聊天、生成任务及下发回执按需求补齐。
+当前 `codex/fullstack` 已提供社区时间线、好友请求、消息、AI 合照任务、照片上传/删除和设备联调接口。生产部署仍需将 DemoStore、本地文件存储和本地 AI 适配器替换为 PostgreSQL、OSS、任务队列及真实模型服务，并按本文件完成密钥、域名、备份和压测配置。
