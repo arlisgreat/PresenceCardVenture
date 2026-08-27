@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildApp } from '../src/app.js'
+import { DemoStore } from '../src/demo-store.js'
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
 
@@ -52,6 +53,22 @@ test('pairs a device after a user binds its short-lived code', async () => {
   assert.equal(deviceDelete.statusCode, 403)
   const userAck = await app.inject({ method: 'POST', url: '/v1/device/ack', headers: { authorization: 'Bearer demo-token' } })
   assert.equal(userAck.statusCode, 401)
+  await app.close()
+})
+
+test('device state maps pending friend requests to the device owner', async () => {
+  const store = new DemoStore()
+  store.users.set('u_outsider', { id: 'u_outsider', username: 'outsider', displayName: '旁观者', friendCode: '100009' })
+  store.tokens.set('outsider-token', 'u_outsider')
+  const app = await buildApp({ store, uploadsDir: '/tmp/presence-card-test-device-state' })
+  const deviceId = 'dvc_state_test'
+  const code = await app.inject({ method: 'POST', url: '/v1/pair/code', payload: { device_id: deviceId } })
+  await app.inject({ method: 'POST', url: '/v1/pair/bind', headers: { authorization: 'Bearer demo-token', 'content-type': 'application/json' }, payload: { device_id: deviceId, pair_code: code.json().pair_code } })
+  const status = await app.inject({ method: 'GET', url: `/v1/pair/status?device_id=${deviceId}&pair_code=${code.json().pair_code}` })
+  const friendRequest = await app.inject({ method: 'POST', url: '/v1/friend-requests', headers: { authorization: 'Bearer outsider-token', 'content-type': 'application/json' }, payload: { friend_code: '100001' } })
+  assert.equal(friendRequest.statusCode, 201)
+  const state = await app.inject({ method: 'GET', url: '/v1/device/state', headers: { authorization: `Bearer ${status.json().device_token}` } })
+  assert.equal(state.json().pending_friend_requests, 1)
   await app.close()
 })
 

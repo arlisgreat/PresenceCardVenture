@@ -177,6 +177,7 @@ sequenceDiagram
 - `unseen_count > 0` 才去拉 feed，省电省流量；`= 0` 直接回去睡觉。
 - `fw_latest` 为 OTA 预留，MVP 可忽略。
 - `pending_config` 是 Web 下发且尚未回执的玩法配置；设备应用后在 `POST /device/ack` body 中带上 `config_id`。
+- 设备 token 读取状态时，`unseen_count` 和 `pending_friend_requests` 均按该设备绑定的账号与可见关系计算，不返回全局数据。
 
 ### Web 下发玩法配置
 
