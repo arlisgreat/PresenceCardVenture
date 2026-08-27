@@ -16,6 +16,13 @@ test('supports friends, reactions, and messages', async () => {
   assert.equal(conversation.statusCode, 200)
   const message = await app.inject({ method: 'POST', url: '/v1/messages', headers: { ...auth, 'content-type': 'application/json' }, payload: { to: friends.json()[0].username, text: 'hello' } })
   assert.equal(message.statusCode, 201)
+  const imageMessage = await app.inject({ method: 'POST', url: '/v1/messages', headers: { ...auth, 'content-type': 'application/json' }, payload: { to: friends.json()[0].username, photo_id: photoId } })
+  assert.equal(imageMessage.statusCode, 201)
+  assert.equal(imageMessage.json().kind, 'image')
+  assert.equal(imageMessage.json().photo_id, photoId)
+  const messages = await app.inject({ method: 'GET', url: `/v1/messages?friend=${friends.json()[0].username}`, headers: auth })
+  assert.equal(messages.statusCode, 200)
+  assert.equal(messages.json().find((item: any) => item.kind === 'image')?.photo_id, photoId)
   await app.close()
 })
 
