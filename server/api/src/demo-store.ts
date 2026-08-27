@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 const DEMO_JPEG = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/AYf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/AYf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z', 'base64')
 
 export type User = { id: string; username: string; displayName: string; friendCode: string }
-export type Photo = { id: string; authorId: string; filterId: string; caption: string | null; circle?: string; width: number; height: number; createdAt: string; original: Buffer; processed: Buffer; idempotencyKey?: string; deviceId?: string }
+export type Photo = { id: string; authorId: string; filterId: string; playType?: string; beauty?: number; sticker?: string; caption: string | null; circle?: string; width: number; height: number; createdAt: string; original: Buffer; processed: Buffer; idempotencyKey?: string; deviceId?: string }
 export type Message = { id: string; from: string; to: string; text?: string; photoId?: string; createdAt: string }
 export type Job = { id: string; ownerId: string; materialIds: string[]; status: 'queued'|'processing'|'completed'|'failed'; resultPhotoId?: string; error?: string; createdAt: string }
 

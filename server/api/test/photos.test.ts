@@ -11,6 +11,9 @@ test('uploads jpeg, supports idempotent retry, and serves image', async () => {
     'content-type': 'image/jpeg',
     'idempotency-key': 'device-1-1',
     'x-filter-id': 'warm',
+    'x-play-type': 'template',
+    'x-beauty': '42',
+    'x-sticker': 'star',
     'x-width': '320',
     'x-height': '240',
   }
@@ -22,6 +25,11 @@ test('uploads jpeg, supports idempotent retry, and serves image', async () => {
   const image = await app.inject({ method: 'GET', url: `/v1/photos/${first.json().photo_id}/image` })
   assert.equal(image.statusCode, 200)
   assert.equal(image.headers['content-type'], 'image/jpeg')
+  const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: { authorization: 'Bearer demo-token' } })
+  const uploaded = feed.json().items.find((item: any) => item.photo_id === first.json().photo_id)
+  assert.equal(uploaded.play_type, 'template')
+  assert.equal(uploaded.beauty, 42)
+  assert.equal(uploaded.sticker, 'star')
   await app.close()
 })
 

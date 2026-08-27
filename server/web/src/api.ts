@@ -5,6 +5,9 @@ export type FeedItem = {
   photo_id?: string
   author: { username: string; display_name: string }
   filter_id: string
+  play_type?: PlayType
+  beauty?: number
+  sticker?: string
   caption?: string | null
   created_at: string
   image_url: string
@@ -74,12 +77,12 @@ export async function uploadPhoto(file: File, options: { filterId: string; capti
   const localUrl = URL.createObjectURL(file)
   try {
     const payload = await jpegPayload(file)
-    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': '1080', 'X-Height': '1350' } })
+    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': '1080', 'X-Height': '1350' } })
     if (!response.ok) throw new Error(await response.text())
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
-    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: result.url ?? localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
+    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: result.url ?? localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
   } catch {
-    return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
+    return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
   }
 }
 

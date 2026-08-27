@@ -140,6 +140,9 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .upload-stage { position: relative; min-height: 520px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: rgba(220,232,242,.45); border: 1px solid var(--hair); cursor: pointer; transition: border-color .25s, background .25s, transform .25s; }
 .upload-stage:hover, .upload-stage.dragging { border-color: var(--mist-d); background: rgba(220,232,242,.7); }
 .upload-stage.dragging { transform: scale(.995); }
+.upload-stage.template-mode::before { content: ''; position: absolute; inset: 12px; z-index: 1; border: 12px solid rgba(255,253,251,.82); box-shadow: inset 0 0 0 1px rgba(217,139,160,.35); pointer-events: none; }
+.template-sticker { position: absolute; z-index: 2; right: 30px; bottom: 28px; display: inline-flex; align-items: center; justify-content: center; min-width: 42px; min-height: 42px; padding: 6px 9px; color: #a05570; background: rgba(255,253,251,.88); border: 1px solid rgba(217,139,160,.55); font: 19px 'Noto Serif SC', serif; transform: rotate(-6deg); box-shadow: 0 5px 14px rgba(74,61,60,.12); }
+.template-sticker.sticker-date { color: var(--sage-d); border-color: rgba(95,122,88,.45); font-size: 11px; letter-spacing: .08em; transform: rotate(4deg); }
 .upload-stage input { display: none; }
 .upload-prompt { display: grid; justify-items: center; gap: 8px; color: var(--muted); }
 .upload-prompt span { width: 48px; height: 48px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--mist-d); border-radius: 50%; color: var(--mist-d); font-size: 27px; font-weight: 200; }
