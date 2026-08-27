@@ -32,6 +32,22 @@ export type AiJob = {
 
 const API = '/v1'
 
+async function jpegPayload(file: File): Promise<Blob | File> {
+  if (file.type === 'image/jpeg') return file
+  if (file.type !== 'image/png') throw new Error('仅支持 JPG 或 PNG 图片')
+  if (typeof createImageBitmap !== 'function') return file
+  const bitmap = await createImageBitmap(file)
+  const canvas = document.createElement('canvas')
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height))
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+  canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', .88))
+  if (!blob) throw new Error('图片转换失败')
+  return blob
+}
+
 const demoFeed: FeedItem[] = [
   { id: 'seed-1', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', caption: '傍晚的风从窗台进来。', created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(), image_url: '/assets/feed-window.jpg', reactions: { heart: 12, star: 4 }, my_reactions: [], circle: '傍晚的天空' },
   { id: 'seed-2', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'film', caption: '把今天折成一张小卡。', created_at: new Date(Date.now() - 1000 * 60 * 72).toISOString(), image_url: '/assets/feed-portrait.jpg', reactions: { heart: 8, star: 2 }, my_reactions: [], circle: '小圈' },
@@ -57,7 +73,8 @@ export async function getFeed(): Promise<FeedItem[]> {
 export async function uploadPhoto(file: File, options: { filterId: string; caption: string; play: PlayType; beauty: number; sticker: string }): Promise<FeedItem> {
   const localUrl = URL.createObjectURL(file)
   try {
-    const response = await fetch(`${API}/photos`, { method: 'POST', body: file, headers: { Authorization: 'Bearer demo-token', 'Content-Type': file.type || 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': '1080', 'X-Height': '1350' } })
+    const payload = await jpegPayload(file)
+    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Caption': encodeURIComponent(options.caption), 'X-Width': '1080', 'X-Height': '1350' } })
     if (!response.ok) throw new Error(await response.text())
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
     return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: result.url ?? localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: '我的小圈' }
