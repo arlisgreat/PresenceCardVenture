@@ -74,6 +74,7 @@ sequenceDiagram
 ```json
 { "pair_code": "482913", "expires_in": 600 }
 ```
+重复领取只更新配对码及过期时间，已绑定关系、设备 token 和玩法配置继续保留。
 
 ### 1.2 轮询配对状态
 
@@ -171,17 +172,19 @@ sequenceDiagram
   "pending_friend_requests": 1,
   "server_time": "2026-08-26T09:31:02Z",
   "fw_latest": { "version": "0.1.2", "url": "https://.../fw_0.1.2.bin", "md5": "..." },
-  "pending_config": null
+  "pending_config": null,
+  "active_config": null
 }
 ```
 - `unseen_count > 0` 才去拉 feed，省电省流量；`= 0` 直接回去睡觉。
 - `fw_latest` 为 OTA 预留，MVP 可忽略。
 - `pending_config` 是 Web 下发且尚未回执的玩法配置；设备应用后在 `POST /device/ack` body 中带上 `config_id`。
+- `active_config` 是设备最近一次成功回执的玩法配置；设备重新上线或 Web 重新绑定时可据此恢复当前显示，不会因清空 `pending_config` 而丢失。
 - 设备 token 读取状态时，`unseen_count` 和 `pending_friend_requests` 均按该设备绑定的账号与可见关系计算，不返回全局数据。
 
 ### Web 下发玩法配置
 
-设备主人在 Web 端调用 `POST /device/config`，服务端只接受已绑定设备主人提交的配置。设备下一次读取 `/device/state` 即可取得 `pending_config`，成功应用后通过 ack 清除。
+设备主人在 Web 端调用 `POST /device/config`，服务端只接受已绑定设备主人提交的配置。设备下一次读取 `/device/state` 即可取得 `pending_config`，成功应用后通过 ack 清除并转为 `active_config`。
 
 请求可带 `Idempotency-Key`；同一设备使用相同 key 重试时返回 `200` 和第一次的 `config_id`，不会重复排队。
 

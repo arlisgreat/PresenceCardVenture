@@ -20,7 +20,7 @@ export class DemoStore {
   jobs = new Map<string, Job>()
   friendships = new Set<string>()
   friendRequests = new Map<string, FriendRequest>()
-  devices = new Map<string, { userId?: string; token?: string; pairCode?: string; expiresAt?: number; lastSeen?: string; pendingConfig?: DeviceConfig; configIdempotencyKey?: string; configResponse?: { config_id: string; status: 'queued'; device_id: string; config: DeviceConfig } }>()
+  devices = new Map<string, { userId?: string; token?: string; pairCode?: string; expiresAt?: number; lastSeen?: string; pendingConfig?: DeviceConfig; activeConfig?: DeviceConfig; configIdempotencyKey?: string; configResponse?: { config_id: string; status: 'queued'; device_id: string; config: DeviceConfig } }>()
 
   constructor(options: { uploadDailyLimit?: number } = {}) {
     this.uploadDailyLimit = Math.max(1, Math.floor(options.uploadDailyLimit ?? Number(process.env.UPLOAD_DAILY_LIMIT ?? 60)))

@@ -96,6 +96,10 @@ test('queues a play config for the bound device and clears it on device ack', as
   assert.equal(ack.statusCode, 204)
   const cleared = await app.inject({ method: 'GET', url: '/v1/device/state', headers: { authorization: `Bearer ${deviceToken}` } })
   assert.equal(cleared.json().pending_config, null)
+  assert.deepEqual(cleared.json().active_config, { id: queued.json().config_id, filter_id: 'film', play_type: 'ccd', beauty: 28, sticker: 'star', updated_at: cleared.json().active_config.updated_at })
+  await app.inject({ method: 'POST', url: '/v1/pair/code', payload: { device_id: deviceId } })
+  const afterPairCodeRefresh = await app.inject({ method: 'GET', url: '/v1/device/state', headers: { authorization: `Bearer ${deviceToken}` } })
+  assert.equal(afterPairCodeRefresh.json().active_config.id, queued.json().config_id)
 
   const forbidden = await app.inject({ method: 'POST', url: '/v1/device/config', headers: { authorization: 'Bearer demo-user-2', 'content-type': 'application/json' }, payload: { device_id: deviceId, filter_id: 'warm', play_type: 'ccd', beauty: 0, sticker: 'none' } })
   assert.equal(forbidden.statusCode, 403)
