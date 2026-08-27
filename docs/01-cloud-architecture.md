@@ -24,3 +24,4 @@
 - `GET /health` 是存活探针，只表示 Fastify 进程可响应。
 - `GET /health/ready` 是就绪探针；开发模式返回 `200` 并标注 `mode=demo`。
 - 生产启动时设置 `REQUIRE_PRODUCTION_SERVICES=true`（或 `NODE_ENV=production`），就绪探针会要求 `DATABASE_URL`、`OSS_BUCKET`（或 `OBJECT_STORAGE_BUCKET`）和非模拟的 `AI_PROVIDER`，缺项返回 `503`，避免误把 DemoStore 部署为生产服务。
+- Caddy 在 `APP_DOMAIN` 下将 `/v1/*` 同域反代到 API，并为 React Router 路径回退到 `index.html`；这样 Web 的相对 API 地址在开发和生产都保持一致。
