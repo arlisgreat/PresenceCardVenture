@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deviceAck, deviceHeartbeat, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, getAiJob, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -71,5 +71,16 @@ test('web photo upload includes the selected circle in metadata', async () => {
     globalThis.fetch = originalFetch
     URL.createObjectURL = originalCreateObjectUrl
     URL.revokeObjectURL = originalRevokeObjectUrl
+  }
+})
+
+test('AI helpers propagate provider errors instead of returning fake success', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: { code: 'AI_UNAVAILABLE' } }), { status: 503 })) as typeof fetch
+  try {
+    await assert.rejects(() => createAiJob(['p_1', 'p_2']), /AI_UNAVAILABLE|Request failed: 503/)
+    await assert.rejects(() => getAiJob('job_1'), /AI_UNAVAILABLE|Request failed: 503/)
+  } finally {
+    globalThis.fetch = originalFetch
   }
 })

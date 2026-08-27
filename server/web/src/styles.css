@@ -246,6 +246,7 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .job-actions { display: flex; align-items: center; gap: 10px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blush-d); animation: pulse 1.3s infinite; }
 .status-dot.done { background: var(--sage-d); animation: none; }
+.status-dot.failed { background: #b86d73; animation: none; }
 @keyframes pulse { 50% { opacity: .35; } }
 
 .device-layout { display: grid; grid-template-columns: 1.05fr .95fr; gap: 28px; margin-top: 42px; }
