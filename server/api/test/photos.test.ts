@@ -35,6 +35,18 @@ test('uploads jpeg, supports idempotent retry, and serves image', async () => {
   await app.close()
 })
 
+test('clamps feed limits and rejects malformed values', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-limit' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const bounded = await app.inject({ method: 'GET', url: '/v1/feed?limit=999', headers })
+  assert.equal(bounded.statusCode, 200)
+  assert.ok(bounded.json().items.length <= 32)
+  const malformed = await app.inject({ method: 'GET', url: '/v1/feed?limit=wat', headers })
+  assert.equal(malformed.statusCode, 400)
+  assert.equal(malformed.json().error.code, 'BAD_REQUEST')
+  await app.close()
+})
+
 test('rejects oversized and non-jpeg uploads', async () => {
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-2' })
   const base = { authorization: 'Bearer demo-token', 'idempotency-key': 'k', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }

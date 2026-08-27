@@ -59,7 +59,18 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
       return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable'))
     }
   })
-  const feed = async (r: FastifyRequest, reply: any, mine = false) => { const { account: u } = auth(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); const photos = (mine ? [...store.photos.values()].filter(p=>p.authorId===u.id) : store.visiblePhotos(u.id)); const etag = `W/\"feed-${photos.map(p=>p.id).join('-')}\"`; if (r.headers['if-none-match'] === etag) return reply.code(304).send(); return reply.send({ items: photos.slice(0, Number((r.query as any)?.limit ?? 8)).map(p=>item(p, u.id, store)), next_cursor: null, etag }) }
+  const feed = async (r: FastifyRequest, reply: any, mine = false) => {
+    const { account: u } = auth(r, store)
+    if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
+    const rawLimit = (r.query as any)?.limit
+    const parsedLimit = rawLimit === undefined ? 8 : Number(rawLimit)
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1) return reply.code(400).send(errorBody('BAD_REQUEST', 'limit must be a positive integer'))
+    const limit = Math.min(32, parsedLimit)
+    const photos = (mine ? [...store.photos.values()].filter(p => p.authorId === u.id) : store.visiblePhotos(u.id))
+    const etag = `W/\"feed-${photos.map(p => p.id).join('-')}\"`
+    if (r.headers['if-none-match'] === etag) return reply.code(304).send()
+    return reply.send({ items: photos.slice(0, limit).map(p => item(p, u.id, store)), next_cursor: null, etag })
+  }
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
   app.delete('/photos/:id', async (r, reply) => {
     const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
