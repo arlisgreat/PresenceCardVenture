@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
+import { AiJob, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceState, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -243,8 +243,10 @@ function DeviceView({ state, feed, onToast }: { state: { unseen_count: number; p
     setBusyAction(action)
     try {
       if (action === 'feed') {
-        const latest = await getDeviceState()
-        log(`GET /v1/device/state · 200 · unseen_count = ${latest.unseen_count}`)
+        if (!deviceToken) { onToast('先绑定设备，再拉取圈子'); return }
+        const page = await getDeviceFeed(deviceToken, 8)
+        if (page.items[0]?.image_url) setDevicePhotoUrl(page.items[0].image_url)
+        log(`GET /v1/feed · 200 · ${page.items.length} items`)
       } else if (action === 'upload') {
         if (!deviceToken) { onToast('先绑定设备，再模拟拍照上传'); return }
         const result = await uploadDevicePhoto(new Blob([DEVICE_DEMO_JPEG], { type: 'image/jpeg' }), deviceToken, DEVICE_ID, `web-device-${Date.now()}`)

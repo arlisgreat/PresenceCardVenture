@@ -256,6 +256,14 @@ export async function getDeviceState(): Promise<{ unseen_count: number; pending_
   try { return await request('/device/state') } catch { return { unseen_count: 3, pending_friend_requests: 1, server_time: new Date().toISOString() } }
 }
 
+export type DeviceFeedPage = { items: FeedItem[]; next_cursor?: string | null; etag?: string }
+
+export async function getDeviceFeed(deviceToken: string, limit = 8): Promise<DeviceFeedPage> {
+  const boundedLimit = Math.max(1, Math.min(32, Math.floor(limit)))
+  const response = await requestWithToken<DeviceFeedPage>(`/feed?limit=${boundedLimit}`, deviceToken, { method: 'GET' })
+  return { ...response, items: (response.items ?? []).map(item => ({ ...item, id: item.id ?? item.photo_id ?? `device-${item.created_at}` })) }
+}
+
 export async function requestPairCode(deviceId: string): Promise<{ pair_code: string; expires_in: number }> {
   return request('/pair/code', { method: 'POST', body: JSON.stringify({ device_id: deviceId, fw_version: '0.1.0', hw: 'cams3-lite' }) })
 }

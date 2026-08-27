@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getPairStatus, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -94,4 +94,20 @@ test('feed circle filtering keeps all view broad and named circles exact', () =>
   assert.deepEqual(filterFeedByCircle(feed, '全部').map(item => item.id), ['small', 'sky', 'film'])
   assert.deepEqual(filterFeedByCircle(feed, '傍晚的天空').map(item => item.id), ['sky'])
   assert.deepEqual(filterFeedByCircle(feed, '小圈').map(item => item.id), ['small'])
+})
+
+test('device feed helper reads the authenticated device feed endpoint', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; method?: string; authorization?: string } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), method: init?.method, authorization: new Headers(init?.headers).get('Authorization') ?? undefined }
+    return new Response(JSON.stringify({ items: [{ photo_id: 'p_device_feed', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', image_url: '/v1/photos/p_device_feed/image', reactions: {} }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const page = await getDeviceFeed('device-token-test', 8)
+    assert.equal(page.items[0].photo_id, 'p_device_feed')
+    assert.deepEqual(request, { url: '/v1/feed?limit=8', method: 'GET', authorization: 'Bearer device-token-test' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
