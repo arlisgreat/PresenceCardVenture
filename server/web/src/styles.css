@@ -182,6 +182,15 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .signal-count, .consent-badge, .device-pill { padding: 7px 11px; border-radius: 20px; background: var(--mist); color: #5c7e9c; font-size: 10px; white-space: nowrap; }
 .messages-layout { display: grid; grid-template-columns: 220px 1fr; min-height: 510px; margin-top: 42px; border: 1px solid var(--hair); background: rgba(255,255,255,.43); }
 .friend-list { border-right: 1px solid var(--hair); padding: 12px; }
+.friend-list-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 9px 10px; border-bottom: 1px solid var(--hair); }
+.friend-list-head .quiet-button { padding: 3px 0; font-size: 10px; }
+.friend-add { display: flex; gap: 5px; padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.friend-add input { min-width: 0; flex: 1; border: 1px solid var(--hair); background: var(--paper); padding: 7px 8px; font-size: 10px; }
+.friend-add button, .friend-request button { border: 1px solid var(--blush-d); background: var(--blush); color: var(--ink); padding: 5px 8px; font-size: 10px; }
+.friend-add button:disabled, .friend-request button:disabled { opacity: .5; cursor: wait; }
+.friend-request { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 3px; border-bottom: 1px solid var(--hair); }
+.friend-request b { display: block; font-size: 11px; font-weight: 500; }
+.friend-request small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .friend-row { width: 100%; display: grid; grid-template-columns: 34px 1fr 10px; align-items: center; gap: 9px; padding: 12px 9px; border: 0; background: transparent; text-align: left; color: var(--ink); }
 .friend-row.active { background: rgba(246,223,228,.55); }
 .friend-avatar { width: 32px; height: 32px; background: var(--mist); color: #587694; font-size: 12px; }
@@ -286,8 +295,8 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
   .studio-layout, .messages-layout, .ai-layout, .device-layout { grid-template-columns: 1fr; }
   .upload-stage { min-height: 390px; }
   .messages-layout { min-height: 620px; }
-  .friend-list { border-right: 0; border-bottom: 1px solid var(--hair); display: flex; overflow-x: auto; }
-  .friend-row { min-width: 150px; }
+  .friend-list { border-right: 0; border-bottom: 1px solid var(--hair); display: grid; gap: 2px; overflow: visible; align-content: start; }
+  .friend-list-head, .friend-add, .friend-request, .friend-row { width: 100%; min-width: 0; }
   .device-card { padding: 16px; }
   .device-controls { grid-template-columns: 1fr; }
   .device-controls button { min-height: 48px; text-align: left; padding: 7px 12px; }

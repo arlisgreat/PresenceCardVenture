@@ -28,6 +28,9 @@ export type Message = {
   image_url?: string
 }
 
+export type Friend = { username: string; display_name: string }
+export type FriendRequest = { id: string; status: 'pending' | 'accepted'; direction: 'incoming' | 'outgoing'; requester: Friend; addressee: Friend; created_at: string }
+
 export type AiJob = {
   id: string
   status: 'queued' | 'processing' | 'completed' | 'failed'
@@ -113,6 +116,22 @@ export async function getMessages(friend = 'luna'): Promise<Message[]> {
       { id: 'm2', sender: 'me', senderName: '我', body: '我也拍下来了，晚点放进圈子。', createdAt: new Date(Date.now() - 1000 * 60 * 37).toISOString() },
     ]
   }
+}
+
+export async function getFriends(): Promise<Friend[]> {
+  try { return await request<Friend[]>('/friends') } catch { return [{ username: 'luna', display_name: '露娜' }, { username: 'momo', display_name: '墨墨' }] }
+}
+
+export async function getFriendRequests(): Promise<FriendRequest[]> {
+  try { return await request<FriendRequest[]>('/friend-requests') } catch { return [] }
+}
+
+export async function sendFriendRequest(friendCode: string): Promise<FriendRequest> {
+  return request<FriendRequest>('/friend-requests', { method: 'POST', body: JSON.stringify({ friend_code: friendCode }) })
+}
+
+export async function acceptFriendRequest(id: string): Promise<FriendRequest> {
+  return request<FriendRequest>(`/friend-requests/${id}/accept`, { method: 'POST', body: JSON.stringify({}) })
 }
 
 export async function sendMessage(friend: string, body: string, photoId?: string): Promise<Message> {

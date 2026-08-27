@@ -7,6 +7,7 @@ export type User = { id: string; username: string; displayName: string; friendCo
 export type Photo = { id: string; authorId: string; filterId: string; playType?: string; beauty?: number; sticker?: string; caption: string | null; circle?: string; width: number; height: number; createdAt: string; original: Buffer; processed: Buffer; idempotencyKey?: string; deviceId?: string }
 export type Message = { id: string; from: string; to: string; text?: string; photoId?: string; createdAt: string }
 export type Job = { id: string; ownerId: string; materialIds: string[]; status: 'queued'|'processing'|'completed'|'failed'; resultPhotoId?: string; error?: string; createdAt: string }
+export type FriendRequest = { id: string; requesterId: string; addresseeId: string; status: 'pending' | 'accepted'; createdAt: string }
 
 export class DemoStore {
   users = new Map<string, User>()
@@ -16,6 +17,7 @@ export class DemoStore {
   reactions = new Map<string, Set<string>>()
   jobs = new Map<string, Job>()
   friendships = new Set<string>()
+  friendRequests = new Map<string, FriendRequest>()
   devices = new Map<string, { userId?: string; token?: string; pairCode?: string; expiresAt?: number; lastSeen?: string }>()
 
   constructor() {
