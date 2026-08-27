@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --import ../api/node_modules/tsx/dist/loader.mjs --test",
     "preview": "vite preview"
   },
   "dependencies": {

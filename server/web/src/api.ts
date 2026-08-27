@@ -38,6 +38,12 @@ export type AiJob = {
   message?: string
 }
 
+export type PairStatus = {
+  status: 'pending' | 'bound'
+  device_token?: string
+  user?: { username?: string; display_name?: string }
+}
+
 class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message)
@@ -105,13 +111,17 @@ const demoFeed: FeedItem[] = [
   { id: 'seed-3', author: { username: 'luna', display_name: '露娜' }, filter_id: 'ccd', caption: '今天也有好好在场。', created_at: new Date(Date.now() - 1000 * 60 * 160).toISOString(), image_url: '/assets/feed-friends.jpg', reactions: { heart: 19, star: 7 }, my_reactions: [], circle: '宿舍窗台' },
 ]
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = { Authorization: 'Bearer demo-token', ...(init?.headers as Record<string, string> ?? {}) }
+async function requestWithToken<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, ...(init?.headers as Record<string, string> ?? {}) }
   if (init?.body) headers['Content-Type'] = 'application/json'
   const response = await fetch(`${API}${path}`, { ...init, headers })
   if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`)
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestWithToken<T>(path, 'demo-token', init)
 }
 
 export async function getFeed(): Promise<FeedItem[]> {
@@ -221,4 +231,16 @@ export async function requestPairCode(deviceId: string): Promise<{ pair_code: st
 
 export async function bindDevice(deviceId: string, pairCode: string): Promise<void> {
   await request('/pair/bind', { method: 'POST', body: JSON.stringify({ device_id: deviceId, pair_code: pairCode }) })
+}
+
+export async function getPairStatus(deviceId: string, pairCode: string): Promise<PairStatus> {
+  return request<PairStatus>(`/pair/status?device_id=${encodeURIComponent(deviceId)}&pair_code=${encodeURIComponent(pairCode)}`)
+}
+
+export async function deviceHeartbeat(deviceToken: string): Promise<void> {
+  await requestWithToken('/device/heartbeat', deviceToken, { method: 'POST', body: JSON.stringify({}) })
+}
+
+export async function deviceAck(deviceToken: string): Promise<void> {
+  await requestWithToken('/device/ack', deviceToken, { method: 'POST', body: JSON.stringify({}) })
 }
