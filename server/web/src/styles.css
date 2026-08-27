@@ -235,6 +235,16 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .device-controls button:disabled { opacity: .55; cursor: wait; }
 .device-controls button span { display: block; margin-top: 6px; color: var(--blush-d); font-size: 16px; }
 .device-info { border: 1px solid var(--hair); background: rgba(255,255,255,.5); padding: 19px 21px; }
+.pairing-panel { padding: 0 0 17px; margin-bottom: 2px; border-bottom: 1px solid var(--hair); }
+.pairing-panel > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.pairing-panel small { color: var(--muted); font-size: 10px; }
+.pairing-actions { display: grid; grid-template-columns: 1fr 104px 58px; gap: 7px; margin-top: 12px; }
+.pairing-actions button { min-height: 34px; border: 1px solid var(--hair); background: white; color: var(--ink); font-size: 10px; }
+.pairing-actions button:first-child { border-color: var(--mist-d); color: #5c7e9c; }
+.pairing-actions button:hover:not(:disabled) { background: var(--mist); }
+.pairing-actions button:disabled { opacity: .5; cursor: wait; }
+.pairing-actions input { min-width: 0; border: 1px solid var(--hair); background: rgba(255,255,255,.75); padding: 0 8px; color: var(--ink); font: 12px monospace; letter-spacing: .12em; text-align: center; }
+.pairing-actions input::placeholder { color: #b5b7b8; letter-spacing: 0; font: 10px 'Noto Sans SC', sans-serif; }
 .info-row { display: flex; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--hair); font-size: 11px; color: var(--muted); }
 .info-row b { color: var(--ink); font-weight: 500; }
 .green-text { color: var(--sage-d) !important; }

@@ -91,6 +91,24 @@ sequenceDiagram
 
 > **固件要求**：`device_token` 写入 NVS；此后每次启动读取。收到任一接口 `401 TOKEN_INVALID` 时清除 token 并回到配对流程。
 
+### 1.3 Web 绑定设备
+
+`POST /pair/bind` —— **需要用户登录 token**
+
+Web 用户在设备实验室输入设备屏幕上的配对码后调用：
+
+```json
+{ "device_id": "dvc_a1b2c3d4e5f6", "pair_code": "482913" }
+```
+
+响应 `200`：
+
+```json
+{ "status": "bound", "device_id": "dvc_a1b2c3d4e5f6", "user": { "username": "ayan", "display_name": "阿岩" } }
+```
+
+配对码过期或不匹配返回 `410 PAIR_EXPIRED`。绑定成功后，设备继续轮询 `GET /pair/status`，取得写入 NVS 的 `device_token`。
+
 ---
 
 ## 2. 拍照上传

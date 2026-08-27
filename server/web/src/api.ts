@@ -119,3 +119,11 @@ export async function getAiJob(id: string): Promise<AiJob> {
 export async function getDeviceState(): Promise<{ unseen_count: number; pending_friend_requests: number; server_time: string }> {
   try { return await request('/device/state') } catch { return { unseen_count: 3, pending_friend_requests: 1, server_time: new Date().toISOString() } }
 }
+
+export async function requestPairCode(deviceId: string): Promise<{ pair_code: string; expires_in: number }> {
+  return request('/pair/code', { method: 'POST', body: JSON.stringify({ device_id: deviceId, fw_version: '0.1.0', hw: 'cams3-lite' }) })
+}
+
+export async function bindDevice(deviceId: string, pairCode: string): Promise<void> {
+  await request('/pair/bind', { method: 'POST', body: JSON.stringify({ device_id: deviceId, pair_code: pairCode }) })
+}
