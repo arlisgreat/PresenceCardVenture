@@ -41,11 +41,24 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND', 'photo not found'))
     if (!store.isFriend(u.id, p.authorId)) return reply.code(403).send(errorBody('FORBIDDEN', 'photo is not visible to this user'))
-    return reply.header('cache-control', 'private, max-age=31536000, immutable').type('image/jpeg').send(p.processed)
+    try {
+      const image = await files.read(p)
+      return reply.header('cache-control', 'private, max-age=31536000, immutable').type('image/jpeg').send(image)
+    } catch {
+      return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable'))
+    }
   })
   const feed = async (r: FastifyRequest, reply: any, mine = false) => { const u = user(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); const photos = (mine ? [...store.photos.values()].filter(p=>p.authorId===u.id) : store.visiblePhotos(u.id)); const etag = `W/\"feed-${photos.map(p=>p.id).join('-')}\"`; if (r.headers['if-none-match'] === etag) return reply.code(304).send(); return reply.send({ items: photos.slice(0, Number((r.query as any)?.limit ?? 8)).map(p=>item(p, u.id, store)), next_cursor: null, etag }) }
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
-  app.delete('/photos/:id', async (r, reply) => { const u = user(r, store), p = store.photos.get((r.params as any).id); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found')); if (p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN','not owner')); store.photos.delete(p.id); await files.remove(p); return reply.code(204).send() })
+  app.delete('/photos/:id', async (r, reply) => {
+    const u = user(r, store), p = store.photos.get((r.params as any).id)
+    if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
+    if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found'))
+    if (p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN','not owner'))
+    try { await files.remove(p) } catch { return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable')) }
+    store.photos.delete(p.id)
+    return reply.code(204).send()
+  })
 }
 function uploadResult(p: any, store?: DemoStore) { return { photo_id: p.id, url: `/v1/photos/${p.id}/image`, created_at: p.createdAt, daily_remaining: store ? Math.max(0, store.uploadDailyLimit - store.dailyUploadCount(p.authorId, p.deviceId ?? 'web')) : 60 } }
 function item(p: any, uid: string, store: DemoStore) { const author = store.user(p.authorId); const my = Object.keys(store.reactionsFor(p.id)).filter(type => store.reactions.has(`${p.id}:${type}:${uid}`)); return { photo_id: p.id, author: { username: author?.username ?? '', display_name: author?.displayName ?? '' }, filter_id: p.filterId, play_type: p.playType ?? 'ccd', beauty: p.beauty ?? 0, sticker: p.sticker ?? 'none', caption: p.caption, circle: p.circle ?? '小圈', created_at: p.createdAt, width: p.width, height: p.height, image_url: `/v1/photos/${p.id}/image`, reactions: store.reactionsFor(p.id), my_reactions: my, mine: p.authorId === uid } }

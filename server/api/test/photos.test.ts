@@ -60,8 +60,10 @@ test('validates photo metadata without turning malformed headers into server err
 
 test('routes photo persistence through an injectable storage adapter', async () => {
   const calls: string[] = []
+  const storedImage = Buffer.from([0xff, 0xd8, 0x42, 0xff, 0xd9])
   const storage = {
     async save(photo: { id: string }) { calls.push(`save:${photo.id}`) },
+    async read(photo: { id: string }) { calls.push(`read:${photo.id}`); return storedImage },
     async remove(photo: { id: string }) { calls.push(`remove:${photo.id}`) },
   }
   const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-adapter', photoStorage: storage })
@@ -74,9 +76,13 @@ test('routes photo persistence through an injectable storage adapter', async () 
   assert.equal(created.statusCode, 201)
   const id = created.json().photo_id
   assert.deepEqual(calls, [`save:${id}`])
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 200)
+  assert.deepEqual(image.rawPayload, storedImage)
+  assert.deepEqual(calls, [`save:${id}`, `read:${id}`])
   const removed = await app.inject({ method: 'DELETE', url: `/v1/photos/${id}`, headers: { authorization: 'Bearer demo-token' } })
   assert.equal(removed.statusCode, 204)
-  assert.deepEqual(calls, [`save:${id}`, `remove:${id}`])
+  assert.deepEqual(calls, [`save:${id}`, `read:${id}`, `remove:${id}`])
   await app.close()
 })
 
@@ -97,6 +103,47 @@ test('does not publish metadata when photo storage fails', async () => {
   assert.equal(failed.json().error.code, 'STORAGE_UNAVAILABLE')
   const after = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
   assert.equal(after.json().items.length, before.json().items.length)
+  await app.close()
+})
+
+test('reports read failures without leaking internal storage errors', async () => {
+  const storage = {
+    async save() {},
+    async read() { throw new Error('object store timeout') },
+    async remove() {},
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-read-failure', photoStorage: storage })
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'read-failure-1' },
+    payload: jpeg,
+  })
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${created.json().photo_id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 503)
+  assert.equal(image.json().error.code, 'STORAGE_UNAVAILABLE')
+  await app.close()
+})
+
+test('keeps photo metadata when storage deletion fails', async () => {
+  const storage = {
+    async save() {},
+    async read() { return jpeg },
+    async remove() { throw new Error('object store timeout') },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-delete-failure', photoStorage: storage })
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'delete-failure-1' },
+    payload: jpeg,
+  })
+  const id = created.json().photo_id
+  const removed = await app.inject({ method: 'DELETE', url: `/v1/photos/${id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(removed.statusCode, 503)
+  assert.equal(removed.json().error.code, 'STORAGE_UNAVAILABLE')
+  const mine = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  assert.ok(mine.json().items.some((item: any) => item.photo_id === id))
   await app.close()
 })
 

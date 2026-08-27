@@ -59,8 +59,9 @@
 - 设备上传限额：API 按“作者 + 设备 + UTC 日期”计数，默认每日 60 张，可由 `UPLOAD_DAILY_LIMIT` 调整；重复 `Idempotency-Key` 不重复计数，超限返回 `429` 和 `retry_after`。
 - 照片访问安全：二进制下载需要认证并再次检查自己/好友可见性；Web 使用受保护图片加载器携带认证头，非法文案、尺寸和美颜参数返回 `400`。
 - AI 适配边界：`AiProvider` 接口支持注入真实模型服务；Demo 默认使用命名为 `simulator` 的可重复 provider，成功/失败状态和 provider 名称都会返回给客户端。
-- 图片存储边界：`PhotoStorage` 接口支持注入 OSS 等对象存储；Demo 默认使用本地 `PhotoStore`，上传和删除流程保持相同契约。
+- 图片存储边界：`PhotoStorage` 的 `save/read/remove` 接口支持注入 OSS 等对象存储；Demo 默认使用本地 `PhotoStore`，上传、鉴权下载和删除流程保持相同契约。
 - 存储故障保护：文件保存失败返回 `503 STORAGE_UNAVAILABLE`，不会把未落盘照片写入 Feed；客户端可用原幂等键重试。
+- 下载或删除存储失败同样返回 `503`；删除失败时保留元数据，避免对象仍存在但所有者失去管理入口。
 
 ## 待确认问题
 

@@ -112,6 +112,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/StorageUnavailable" }
 
   /photos/{photo_id}/image:
     get:
@@ -136,6 +137,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/StorageUnavailable" }
 
   /photos/mine:
     get:
@@ -354,6 +356,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     RateLimited:
       description: "超限，响应含 retry_after（秒），严格退避"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    StorageUnavailable:
+      description: "图片存储暂不可用；请求未完成，稍后重试"
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
