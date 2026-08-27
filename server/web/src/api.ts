@@ -73,6 +73,10 @@ export async function reactToPhoto(id: string, active: boolean): Promise<void> {
   } catch { /* local fallback is handled by the view */ }
 }
 
+export async function pokePhoto(id: string): Promise<void> {
+  try { await request(`/photos/${id}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'wow' }) }) } catch { /* the toast still gives local feedback */ }
+}
+
 export async function deletePhoto(id: string): Promise<void> {
   if (id.startsWith('local-') || id.startsWith('seed-')) return
   await request(`/photos/${id}`, { method: 'DELETE' })
