@@ -8,9 +8,11 @@ import { socialRoutes } from './routes/social.js'
 import { aiRoutes } from './routes/ai.js'
 import type { AiProvider } from './ai-provider.js'
 import { DemoSessionStore, type UserSessionStore } from './prisma-session-store.js'
+import type { DevicePairStore } from './prisma-device-store.js'
 
-export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; authStore?: UserSessionStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
+export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; authStore?: UserSessionStore; devicePairStore?: DevicePairStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
   const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const authStore = options.authStore ?? new DemoSessionStore(store); const files = options.photoStorage ?? new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
+  const devicePairStore = options.devicePairStore
   const requireProductionServices = options.requireProductionServices ?? (process.env.REQUIRE_PRODUCTION_SERVICES === 'true' || process.env.NODE_ENV === 'production')
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 })
   app.addHook('onRequest', async (request, reply) => {
@@ -29,6 +31,7 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     const persistenceProvider = String(process.env.PERSISTENCE_PROVIDER ?? '').trim().toLowerCase()
     const persistenceAdapter = String((store as DemoStore & { provider?: string }).provider ?? '').trim().toLowerCase()
     const sessionAdapter = String(authStore.provider ?? '').trim().toLowerCase()
+    const deviceAdapter = String(devicePairStore?.provider ?? '').trim().toLowerCase()
     const checks = {
       database: Boolean(process.env.DATABASE_URL),
       object_storage: Boolean(process.env.OSS_BUCKET || process.env.OBJECT_STORAGE_BUCKET),
@@ -36,8 +39,10 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
       persistence_provider: persistenceProvider === 'prisma',
       persistence_adapter: persistenceProvider === 'prisma' && persistenceAdapter === 'prisma',
       session_adapter: persistenceProvider === 'prisma' && sessionAdapter === 'prisma',
+      device_adapter: persistenceProvider === 'prisma' && deviceAdapter === 'prisma',
+      device_token_encryption: persistenceProvider === 'prisma' && Boolean(process.env.DEVICE_TOKEN_ENCRYPTION_KEY),
     }
-    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : name === 'persistence_provider' ? 'PERSISTENCE_PROVIDER' : name === 'persistence_adapter' ? 'PRISMA_STORE_ADAPTER' : name === 'session_adapter' ? 'PRISMA_SESSION_ADAPTER' : 'DATABASE_URL')
+    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : name === 'persistence_provider' ? 'PERSISTENCE_PROVIDER' : name === 'persistence_adapter' ? 'PRISMA_STORE_ADAPTER' : name === 'session_adapter' ? 'PRISMA_SESSION_ADAPTER' : name === 'device_adapter' ? 'PRISMA_DEVICE_ADAPTER' : name === 'device_token_encryption' ? 'DEVICE_TOKEN_ENCRYPTION_KEY' : 'DATABASE_URL')
     const ready = !requireProductionServices || missing.length === 0
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ready' : 'blocked', mode: requireProductionServices ? 'production' : 'demo', checks, missing })
   })
@@ -47,9 +52,9 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     if (!user) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     return { id: user.id, username: user.username, display_name: user.displayName, friend_code: user.friendCode }
   })
-  app.post('/v1/pair/code', async (r:any,reply)=>{const {device_id}=r.body??{};if(!device_id)return reply.code(400).send(errorBody('BAD_REQUEST','device_id required'));let code='';do { code=String(randomInt(100000, 1000000)) } while ([...store.devices.values()].some(device => device.pairCode === code));const existing=store.devices.get(device_id);store.devices.set(device_id,{...existing,pairCode:code,expiresAt:Date.now()+600000});return {pair_code:code,expires_in:600}})
-  app.get('/v1/pair/status', async (r:any,reply)=>{const d=store.devices.get(r.query.device_id);if(!d||d.pairCode!==r.query.pair_code)return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));if(!d.userId)return reply.code(202).send({status:'pending'});return {status:'bound',device_token:d.token,user:{username:store.user(d.userId)?.username,display_name:store.user(d.userId)?.displayName}}})
-  app.post('/v1/pair/bind', async (r:any,reply)=>{const u=store.userForToken(String(r.headers.authorization??'').replace(/^Bearer\s+/i,'')), body=r.body??{}, d=store.devices.get(body.device_id);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));if(!d||d.pairCode!==body.pair_code||!d.expiresAt||d.expiresAt<Date.now())return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));d.userId=u.id;d.token=d.token??`device-token-${body.device_id}`;return {status:'bound',device_id:body.device_id,user:{username:u.username,display_name:u.displayName}}})
+  app.post('/v1/pair/code', async (r:any,reply)=>{const {device_id,fw_version}=r.body??{};if(!device_id)return reply.code(400).send(errorBody('BAD_REQUEST','device_id required'));let code='';do { code=String(randomInt(100000, 1000000)) } while (!devicePairStore && [...store.devices.values()].some(device => device.pairCode === code));const expiresAt=new Date(Date.now()+600000);if(devicePairStore){await devicePairStore.savePairCode(String(device_id),code,expiresAt,fw_version ? String(fw_version) : undefined)} else {const existing=store.devices.get(device_id);store.devices.set(device_id,{...existing,pairCode:code,expiresAt:expiresAt.getTime()})}return {pair_code:code,expires_in:600}})
+  app.get('/v1/pair/status', async (r:any,reply)=>{const deviceId=String(r.query.device_id??'');const pairCode=String(r.query.pair_code??'');if(devicePairStore){try {const status=await devicePairStore.status(deviceId,pairCode);if(status.status==='pending')return reply.code(202).send(status);return {status:'bound',device_token:status.deviceToken,user:{username:status.user?.username,display_name:status.user?.displayName}}} catch (error) {if(error instanceof Error && error.message==='PAIR_EXPIRED')return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));throw error}}const d=store.devices.get(deviceId);if(!d||d.pairCode!==pairCode)return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));if(!d.userId)return reply.code(202).send({status:'pending'});return {status:'bound',device_token:d.token,user:{username:store.user(d.userId)?.username,display_name:store.user(d.userId)?.displayName}}})
+  app.post('/v1/pair/bind', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const u=await authStore.userForToken(token), body=r.body??{};if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));if(devicePairStore){try {await devicePairStore.bind(String(body.device_id??''),String(body.pair_code??''),u.id);return {status:'bound',device_id:body.device_id,user:{username:u.username,display_name:u.displayName}}} catch (error) {if(error instanceof Error && error.message==='PAIR_EXPIRED')return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));if(error instanceof Error && error.message==='DEVICE_TOKEN_KEY_MISSING')return reply.code(503).send(errorBody('DEVICE_TOKEN_KEY_MISSING','device token encryption is not configured'));throw error}}const d=store.devices.get(body.device_id);if(!d||d.pairCode!==body.pair_code||!d.expiresAt||d.expiresAt<Date.now())return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));d.userId=u.id;d.token=d.token??`device-token-${body.device_id}`;return {status:'bound',device_id:body.device_id,user:{username:u.username,display_name:u.displayName}}})
   app.post('/v1/device/config', async (r:any, reply) => {
     const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
     const user = store.userForToken(token)

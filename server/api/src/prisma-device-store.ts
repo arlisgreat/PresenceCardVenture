@@ -8,14 +8,22 @@ export type DeviceRecord = {
   tokenHash?: string | null
   tokenCiphertext?: string | null
   fwVersion?: string | null
+  user?: { username: string; displayName: string } | null
 }
 
 export type DeviceClient = {
   device: {
-    upsert(args: { where: { id: string }; create: Record<string, unknown>; update: Record<string, unknown> }): Promise<DeviceRecord>
-    findUnique(args: { where: { id: string } }): Promise<DeviceRecord | null>
-    update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<DeviceRecord>
+    upsert(args: any): Promise<DeviceRecord>
+    findUnique(args: any): Promise<DeviceRecord | null>
+    update(args: any): Promise<DeviceRecord>
   }
+}
+
+export interface DevicePairStore {
+  readonly provider: string
+  savePairCode(deviceId: string, pairCode: string, expiresAt: Date, fwVersion?: string): Promise<void>
+  bind(deviceId: string, pairCode: string, userId: string): Promise<{ deviceId: string; deviceToken: string }>
+  status(deviceId: string, pairCode: string): Promise<{ status: 'pending' | 'bound'; deviceToken?: string; userId?: string; user?: { username: string; displayName: string } }>
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -35,7 +43,7 @@ const decrypt = (value: string, secret: string) => {
 }
 
 /** Prisma-backed pairing state. Plain device tokens are returned only at bind time. */
-export class PrismaDeviceStore {
+export class PrismaDeviceStore implements DevicePairStore {
   readonly provider = 'prisma' as const
 
   constructor(
@@ -69,12 +77,13 @@ export class PrismaDeviceStore {
     return { deviceId, deviceToken }
   }
 
-  async status(deviceId: string, pairCode: string): Promise<{ status: 'pending' | 'bound'; deviceToken?: string; userId?: string }> {
-    const device = await this.client.device.findUnique({ where: { id: deviceId } })
+  async status(deviceId: string, pairCode: string): Promise<{ status: 'pending' | 'bound'; deviceToken?: string; userId?: string; user?: { username: string; displayName: string } }> {
+    const device = await this.client.device.findUnique({ where: { id: deviceId }, include: { user: true } })
     if (!device || device.pairCode !== pairCode || !device.pairExpiresAt || device.pairExpiresAt.getTime() <= this.now().getTime()) throw new Error('PAIR_EXPIRED')
     if (!device.userId) return { status: 'pending' }
     if (!device.tokenCiphertext) return { status: 'bound', userId: device.userId }
     if (!this.options.encryptionKey) throw new Error('DEVICE_TOKEN_KEY_MISSING')
-    return { status: 'bound', userId: device.userId, deviceToken: decrypt(device.tokenCiphertext, this.options.encryptionKey) }
+    const user = device.user ? { username: device.user.username, displayName: device.user.displayName } : undefined
+    return { status: 'bound', userId: device.userId, deviceToken: decrypt(device.tokenCiphertext, this.options.encryptionKey), ...(user ? { user } : {}) }
   }
 }

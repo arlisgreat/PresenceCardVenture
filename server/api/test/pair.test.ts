@@ -38,8 +38,12 @@ test('production readiness stays blocked when Prisma is configured without a Pri
     assert.equal(blocked.statusCode, 503)
     assert.equal(blocked.json().checks.persistence_adapter, false)
     assert.equal(blocked.json().checks.session_adapter, false)
+    assert.equal(blocked.json().checks.device_adapter, false)
+    assert.equal(blocked.json().checks.device_token_encryption, false)
     assert.ok(blocked.json().missing.includes('PRISMA_STORE_ADAPTER'))
     assert.ok(blocked.json().missing.includes('PRISMA_SESSION_ADAPTER'))
+    assert.ok(blocked.json().missing.includes('PRISMA_DEVICE_ADAPTER'))
+    assert.ok(blocked.json().missing.includes('DEVICE_TOKEN_ENCRYPTION_KEY'))
     await production.close()
   } finally {
     if (previous.database === undefined) delete process.env.DATABASE_URL
@@ -136,5 +140,32 @@ test('queues a play config for the bound device and clears it on device ack', as
 
   const forbidden = await app.inject({ method: 'POST', url: '/v1/device/config', headers: { authorization: 'Bearer demo-user-2', 'content-type': 'application/json' }, payload: { device_id: deviceId, filter_id: 'warm', play_type: 'ccd', beauty: 0, sticker: 'none' } })
   assert.equal(forbidden.statusCode, 403)
+  await app.close()
+})
+
+test('routes pairing through an injected persistent device store', async () => {
+  let bound = false
+  const calls: string[] = []
+  const devicePairStore = {
+    provider: 'prisma',
+    savePairCode: async (deviceId: string, pairCode: string) => { calls.push(`${deviceId}:${pairCode}`) },
+    bind: async () => { bound = true; return { deviceId: 'dvc_persistent', deviceToken: 'device-secret' } },
+    status: async () => bound ? { status: 'bound' as const, deviceToken: 'device-secret', userId: 'u_demo_1' } : { status: 'pending' as const },
+  }
+  const app = await buildApp({
+    uploadsDir: '/tmp/presence-card-test-persistent-device-route',
+    devicePairStore,
+    authStore: { provider: 'prisma', userForToken: async () => ({ id: 'u_demo_1', username: 'ayan', displayName: '阿岩', friendCode: '100001' }) },
+  })
+  const code = await app.inject({ method: 'POST', url: '/v1/pair/code', payload: { device_id: 'dvc_persistent', fw_version: '0.2.0' } })
+  assert.equal(code.statusCode, 200)
+  assert.equal(calls.length, 1)
+  const pending = await app.inject({ method: 'GET', url: `/v1/pair/status?device_id=dvc_persistent&pair_code=${code.json().pair_code}` })
+  assert.equal(pending.statusCode, 202)
+  const bind = await app.inject({ method: 'POST', url: '/v1/pair/bind', headers: { authorization: 'Bearer real-token', 'content-type': 'application/json' }, payload: { device_id: 'dvc_persistent', pair_code: code.json().pair_code } })
+  assert.equal(bind.statusCode, 200)
+  const status = await app.inject({ method: 'GET', url: `/v1/pair/status?device_id=dvc_persistent&pair_code=${code.json().pair_code}` })
+  assert.equal(status.statusCode, 200)
+  assert.equal(status.json().device_token, 'device-secret')
   await app.close()
 })
