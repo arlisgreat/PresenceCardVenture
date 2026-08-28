@@ -91,6 +91,7 @@
 - 读取错误边界：Feed、消息、好友请求和用户侧设备状态仅在浏览器无法连接 API 时使用本地 Demo 数据；服务端返回 `401/403/429/5xx` 时保留真实失败，并由页面显示连接或登录状态提示，不再用种子内容掩盖会话失效。
 - 生产持久化门禁：`/health/ready` 在生产模式额外要求 `PERSISTENCE_PROVIDER=prisma` 且运行时必须注入真正的 Prisma store adapter；当前 API 尚未把 Prisma store adapter 接入路由，即使环境变量齐全也会因 `PRISMA_STORE_ADAPTER` 返回 `503`，避免将 `DemoStore` 误切到生产。
 - 会话持久化切片：`PrismaSessionStore` 已实现并接入 `/v1/me`，使用 token hash 查询并校验 `expiresAt`/`revokedAt`；生产 readiness 额外检查 `PRISMA_SESSION_ADAPTER`。照片、社交、设备和 AI 仍未迁移，因此即使会话适配器已注入，整体生产 readiness 仍保持阻断。
+- 设备持久化切片：`PrismaDeviceStore` 已覆盖配对码过期与 token hash 写入测试，但暂未接入路由；现有 `/pair/status` 绑定后需要再次返回明文 device token，与只存 hash 的生产安全模型不兼容，待协议调整后再启用。
 - Prisma schema parity：schema 已覆盖 Web 会话、照片玩法元数据、消息和 AI 任务，并提供 `0001_initial_schema` 初始迁移与 PostgreSQL migration lock；这为下一轮 adapter 接入提供数据库基础，但当前不宣称已完成数据读写切换。
 
 ## 待确认问题
