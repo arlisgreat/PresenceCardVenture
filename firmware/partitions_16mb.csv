@@ -1,0 +1,10 @@
+# Presence Card 分区表 (CoreS3 16MB flash)
+# 联网层 (WiFi+mbedTLS+HTTP) 后固件 >1MB, 默认 1MB app 分区放不下。
+# 预留 OTA 双槽 (docs/02 §3.1 fw_latest): factory 开发烧录, ota_0/1 升级用。
+# Name,     Type, SubType,  Offset,   Size
+nvs,        data, nvs,      0x9000,   0x6000
+otadata,    data, ota,      0xf000,   0x2000
+phy_init,   data, phy,      0x11000,  0x1000
+factory,    app,  factory,  0x20000,  4M
+ota_0,      app,  ota_0,    ,         4M
+ota_1,      app,  ota_1,    ,         4M

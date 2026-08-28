@@ -1,0 +1,95 @@
+#include "pvc_store.h"
+
+#include <string.h>
+#include <stdio.h>
+
+#include "esp_log.h"
+#include "esp_mac.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+
+static const char *TAG = "pvc_store";
+
+#define NVS_NS       "pvc"
+#define KEY_TOKEN    "token"
+#define KEY_BOOTCNT  "boot_cnt"
+#define KEY_ETAG     "feed_etag"
+
+static nvs_handle_t s_nvs;
+static char     s_device_id[20];               /* dvc_ + 12 hex + NUL */
+static char     s_token[PVC_TOKEN_MAX];
+static char     s_etag[PVC_ETAG_MAX];
+static uint32_t s_boot_cnt;
+static uint32_t s_photo_seq;                   /* RAM, 每次启动归零 */
+
+esp_err_t pvc_store_init(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) return err;
+
+    err = nvs_open(NVS_NS, NVS_READWRITE, &s_nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* device_id = dvc_ + STA MAC (规范 §1.1: 由 MAC 派生, 终身不变) */
+    uint8_t mac[6] = { 0 };
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(s_device_id, sizeof(s_device_id), "dvc_%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    size_t len = sizeof(s_token);
+    if (nvs_get_str(s_nvs, KEY_TOKEN, s_token, &len) != ESP_OK) {
+        s_token[0] = '\0';
+    }
+    len = sizeof(s_etag);
+    if (nvs_get_str(s_nvs, KEY_ETAG, s_etag, &len) != ESP_OK) {
+        s_etag[0] = '\0';
+    }
+
+    nvs_get_u32(s_nvs, KEY_BOOTCNT, &s_boot_cnt);
+    s_boot_cnt++;
+    nvs_set_u32(s_nvs, KEY_BOOTCNT, s_boot_cnt);
+    nvs_commit(s_nvs);
+
+    ESP_LOGI(TAG, "device_id=%s boot=%lu token=%s", s_device_id,
+             (unsigned long)s_boot_cnt, s_token[0] ? "yes" : "none");
+    return ESP_OK;
+}
+
+const char *pvc_store_device_id(void) { return s_device_id; }
+const char *pvc_store_token(void)     { return s_token; }
+
+esp_err_t pvc_store_set_token(const char *token)
+{
+    strncpy(s_token, token, sizeof(s_token) - 1);
+    s_token[sizeof(s_token) - 1] = '\0';
+    esp_err_t err = nvs_set_str(s_nvs, KEY_TOKEN, s_token);
+    if (err == ESP_OK) err = nvs_commit(s_nvs);
+    return err;
+}
+
+void pvc_store_clear_token(void)
+{
+    s_token[0] = '\0';
+    nvs_erase_key(s_nvs, KEY_TOKEN);
+    nvs_commit(s_nvs);
+}
+
+uint32_t pvc_store_boot_count(void)     { return s_boot_cnt; }
+uint32_t pvc_store_next_photo_seq(void) { return ++s_photo_seq; }
+
+const char *pvc_store_etag(void) { return s_etag; }
+
+void pvc_store_set_etag(const char *etag)
+{
+    strncpy(s_etag, etag, sizeof(s_etag) - 1);
+    s_etag[sizeof(s_etag) - 1] = '\0';
+    nvs_set_str(s_nvs, KEY_ETAG, s_etag);
+    nvs_commit(s_nvs);
+}
