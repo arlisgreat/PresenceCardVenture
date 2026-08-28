@@ -106,6 +106,8 @@ test('publishes a completed AI result to the feed idempotently', async () => {
 
   const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: auth })
   assert.equal(feed.json().items[0].photo_id, published.json().photo_id)
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${published.json().photo_id}/image`, headers: auth })
+  assert.equal(image.statusCode, 200)
   await app.close()
 })
 
