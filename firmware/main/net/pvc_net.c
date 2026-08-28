@@ -206,9 +206,10 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len, const char *filter_id)
+esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len,
+                                const char *filter_id, int beauty)
 {
-    esp_err_t err = pvc_upload_enqueue(jpg, len, filter_id);
+    esp_err_t err = pvc_upload_enqueue(jpg, len, filter_id, beauty);
     if (err == ESP_OK && s_ev) xEventGroupSetBits(s_ev, BIT_PHOTO);
     return err;
 }

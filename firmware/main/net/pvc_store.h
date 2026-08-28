@@ -26,8 +26,10 @@ void        pvc_store_clear_token(void);   /* 收到 401 时调用 (§0 错误�
 uint32_t pvc_store_boot_count(void);       /* 本次启动的 boot 序号 (>=1) */
 uint32_t pvc_store_next_photo_seq(void);   /* 本次启动内单调递增, 从 1 起 */
 
-/* feed 的 If-None-Match etag (§3.2); 未存返回 "" */
-#define PVC_ETAG_MAX 64
+/* feed 的 If-None-Match etag (§3.2); 未存返回 ""。
+ * server 的 etag 为 W/"feed-<全部photo_id>" — Prisma 模式 8 个 UUID 约 300 字节,
+ * 缓冲必须放大到能整存, 截断会导致 304 永不命中。 */
+#define PVC_ETAG_MAX 512
 const char *pvc_store_etag(void);
 void        pvc_store_set_etag(const char *etag);
 

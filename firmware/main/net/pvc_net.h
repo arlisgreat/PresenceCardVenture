@@ -63,10 +63,12 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui);
 
 /*
  * 照片入待传队列 (拍照流程调用, LVGL 任务上下文安全)。
- * jpg: 320x240 JPEG (§2, ≤100KB); filter_id: 规范 §5 登记 id ("none"/"warm"/...)。
+ * jpg: 320x240 JPEG (§2, ≤100KB); filter_id: web/server 登记 id
+ * (none/warm/bw/film/vivid); beauty: 美白 0-100 (X-Beauty)。
  * 有 SD 卡时落盘 /sdcard/queue 断电不丢; 否则驻留 PSRAM (重启丢失)。
  */
-esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len, const char *filter_id);
+esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len,
+                                const char *filter_id, int beauty);
 
 /* 请求立即拉取 feed / 发送积压点赞 (UI 打开好友页或点赞后调用) */
 void pvc_net_signal_feed(void);

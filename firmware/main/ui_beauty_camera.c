@@ -372,9 +372,13 @@ static void save_bmp(const char *path, const uint16_t *rgb565_buf,
 }
 
 /* ================= 上传 (Presence Card 规范 §2) ================= */
-/* 规范 §5 登记的 filter_id (与 hw2d_filter_id_t 一一对应, web 端按 id 显示名) */
+/*
+ * filter_id 对齐 web/server 清单 (none/warm/bw/film/vivid, 规范 §5):
+ *   原图→none  白皙→none(美白走 X-Beauty)  暖阳→warm
+ *   冷调→vivid(近似)  黑白→bw  复古→film
+ */
 static const char *const k_filter_api_id[HW2D_FILTER_MAX] = {
-    "none", "fair", "warm", "cool", "bw", "vintage"
+    "none", "none", "warm", "vivid", "bw", "film"
 };
 
 /*
@@ -417,9 +421,10 @@ static void upload_photo_qvga(const uint16_t *src, uint32_t w, uint32_t h)
         return;
     }
 
-    if (pvc_net_enqueue_photo(jpg, jlen, k_filter_api_id[s_filter]) == ESP_OK) {
-        ESP_LOGI(TAG, "upload queued: %u bytes filter=%s",
-                 (unsigned)jlen, k_filter_api_id[s_filter]);
+    if (pvc_net_enqueue_photo(jpg, jlen, k_filter_api_id[s_filter],
+                              s_white) == ESP_OK) {
+        ESP_LOGI(TAG, "upload queued: %u bytes filter=%s beauty=%d",
+                 (unsigned)jlen, k_filter_api_id[s_filter], s_white);
     }
     free(jpg);
 }

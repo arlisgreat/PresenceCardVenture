@@ -29,6 +29,7 @@ typedef struct up_item {
     size_t   len;
     char     key[64];       /* Idempotency-Key */
     char     filter[16];
+    int      beauty;        /* X-Beauty 0-100 (重启恢复条目为 0) */
 } up_item_t;
 
 static up_item_t *s_head;
@@ -95,7 +96,8 @@ void pvc_upload_init(void)
     if (n) ESP_LOGI(TAG, "restored %d pending photo(s) from %s", n, QUEUE_DIR);
 }
 
-esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len, const char *filter_id)
+esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
+                             const char *filter_id, int beauty)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
 
@@ -107,6 +109,7 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len, const char *filter_
     snprintf(it->key, sizeof(it->key), "%s-%lu-%lu",
              pvc_store_device_id(), (unsigned long)boot, (unsigned long)seq);
     strncpy(it->filter, filter_id, sizeof(it->filter) - 1);
+    it->beauty = (beauty < 0) ? 0 : (beauty > 100 ? 100 : beauty);
 
     /* 优先落盘 (断电不丢) */
     mkdir(QUEUE_DIR, 0755);
@@ -178,9 +181,14 @@ static uint8_t *item_load(up_item_t *it, size_t *len, bool *from_file)
 /* 发送一个条目一次。返回 HTTP 状态码 (传输层失败返回 -1)。 */
 static int item_post(up_item_t *it, const uint8_t *jpg, size_t len, char *rbuf, size_t rcap)
 {
+    char beauty_s[8];
+    snprintf(beauty_s, sizeof(beauty_s), "%d", it->beauty);
     pvc_hdr_t hdrs[] = {
         { "Idempotency-Key", it->key },
+        /* server 校验 X-Device-Id 必须与 token 绑定的设备一致, 缺失即 403 */
+        { "X-Device-Id",     pvc_store_device_id() },
         { "X-Filter-Id",     it->filter },
+        { "X-Beauty",        beauty_s },
         { "X-Width",         PHOTO_W },
         { "X-Height",        PHOTO_H },
     };

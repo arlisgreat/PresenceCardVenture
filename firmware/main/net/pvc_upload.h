@@ -26,8 +26,10 @@ typedef enum {
 /* 启动时调用: 扫描 /sdcard/queue 遗留文件重建队列 (无 SD 时静默跳过) */
 void pvc_upload_init(void);
 
-/* 照片入队 (线程安全)。jpg 内容会被复制/落盘, 调用后可释放。 */
-esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len, const char *filter_id);
+/* 照片入队 (线程安全)。jpg 内容会被复制/落盘, 调用后可释放。
+ * beauty: 美白强度 0-100 (随 X-Beauty 上报; SD 重启恢复的条目回落为 0)。 */
+esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
+                             const char *filter_id, int beauty);
 
 /* 排空队列 (仅在联网任务中调用), 内部按条目做退避重试 */
 pvc_up_result_t pvc_upload_drain(void);
