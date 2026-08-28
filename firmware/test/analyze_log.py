@@ -274,11 +274,14 @@ def run_checks(ev, http, sleeps, boots, panics):
                 statistics.mean(col(photos, "save_ms") or [0])),
         ]
         if encs:
-            lines.append("scale avg=%dms  swap avg=%dms  jpeg avg=%dms  avg %dKB" % (
+            lines.append("scale_be avg=%dms  jpeg avg=%dms  avg %dKB" % (
                 statistics.mean(col(encs, "scale_ms") or [0]),
-                statistics.mean(col(encs, "swap_ms") or [0]),
                 statistics.mean(col(encs, "encode_ms") or [0]),
                 statistics.mean(col(encs, "bytes") or [0]) / 1024))
+        qwaits = col(photos, "queue_ms")
+        if qwaits and max(qwaits) > 100:
+            lines.append("worker 排队等待 avg=%dms max=%dms (连拍积压)" % (
+                statistics.mean(qwaits), max(qwaits)))
         avg_t = statistics.mean(totals) if totals else 0
         v = "FAIL" if avg_t > 5000 else ("WARN" if avg_t > 3000 else "PASS")
         r.add("C14", v,
@@ -291,6 +294,21 @@ def run_checks(ev, http, sleeps, boots, panics):
                   f"max={max(feed_dec)}ms ({len(feed_dec)} 次)")
     else:
         r.add("C14", "SKIP", "无拍照性能事件")
+
+    # C15 PIE SIMD 自测 (开机 [EV] simd pie_swap=1 才算加速生效)
+    simd = evs("simd")
+    if simd:
+        ok = any(d.get("pie_swap") == "1" for d in simd)
+        r.add("C15", "PASS" if ok else "WARN",
+              "PIE swap16 生效" if ok else
+              "PIE swap16 自测未通过, 已回退标量 (功能不受影响, 需查汇编)")
+    else:
+        r.add("C15", "SKIP", "无 simd 自测事件")
+
+    # C16 拍照丢弃 (worker 队列满)
+    pdrop = evs("photo_drop")
+    if pdrop:
+        r.add("C16", "WARN", f"连拍过快被拒 {len(pdrop)} 次 (worker 队列深 2)")
 
     # C12 延迟统计 (信息项)
     lat = {}

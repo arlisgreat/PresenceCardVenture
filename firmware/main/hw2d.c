@@ -14,6 +14,7 @@
 #include <stdio.h>
 
 #if defined(ESP_PLATFORM)
+#include "sdkconfig.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #define HW2D_MALLOC(sz)  heap_caps_malloc((sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
@@ -350,15 +351,75 @@ void hw2d_alpha_blend(uint16_t *dst, const uint16_t *src, uint32_t npix,
 }
 
 /* ================================================================== */
-/* 缩放 (Q16 定点双线性)                                               */
+/* 16bit 车道字节交换 (LE<->BE)                                        */
 /* ================================================================== */
-void hw2d_scale(const uint16_t *src, uint32_t w_src, uint32_t h_src,
-                uint16_t *dst, uint32_t w_dst, uint32_t h_dst)
+#if defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
+#define HW2D_HAVE_PIE 1
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+extern void hw2d_pie_swap16_blk(void *dst, const void *src, uint32_t nblk);
+/* PIE 单使用者互斥: 同核两任务 (LVGL/net) 抢占期间并发用 PIE 会互踩
+ * q 寄存器 (不依赖 IDF 是否保存 PIE 上下文)。try-lock 失败即走标量。 */
+static SemaphoreHandle_t s_pie_mtx;
+#endif
+static bool s_pie_swap_ok = false;
+
+static void swap16_c(uint16_t *dst, const uint16_t *src, uint32_t npix)
+{
+    uint32_t i = 0;
+    if ((((uintptr_t)dst | (uintptr_t)src) & 7u) == 0) {
+        const uint64_t *sq = (const uint64_t *)src;
+        uint64_t *dq = (uint64_t *)dst;
+        uint32_t nq = npix / 4;
+        uint32_t k;
+        for (k = 0; k < nq; k++) {
+            uint64_t q = sq[k];
+            dq[k] = ((q & 0xFF00FF00FF00FF00ULL) >> 8) |
+                    ((q & 0x00FF00FF00FF00FFULL) << 8);
+        }
+        i = nq * 4;
+    }
+    for (; i < npix; i++) {
+        uint16_t v = src[i];
+        dst[i] = (uint16_t)((v >> 8) | (v << 8));
+    }
+}
+
+void hw2d_swap16(uint16_t *dst, const uint16_t *src, uint32_t npix)
+{
+#if HW2D_HAVE_PIE
+    if (s_pie_swap_ok && s_pie_mtx &&
+        ((((uintptr_t)dst | (uintptr_t)src) & 15u) == 0) &&
+        xSemaphoreTake(s_pie_mtx, 0) == pdTRUE) {
+        uint32_t nblk = npix / 8;            /* 8 像素 = 128bit */
+        if (nblk) hw2d_pie_swap16_blk(dst, src, nblk);
+        xSemaphoreGive(s_pie_mtx);
+        swap16_c(dst + nblk * 8, src + nblk * 8, npix - nblk * 8);
+        return;
+    }
+#endif
+    swap16_c(dst, src, npix);
+}
+
+bool hw2d_pie_active(void)
+{
+    return s_pie_swap_ok;
+}
+
+/* ================================================================== */
+/* 缩放 (Q16 定点双线性; be=true 输出大端, 与编码前置字节交换融合)      */
+/* ================================================================== */
+static void scale_impl(const uint16_t *src, uint32_t w_src, uint32_t h_src,
+                       uint16_t *dst, uint32_t w_dst, uint32_t h_dst, bool be)
 {
     uint32_t x, y;
 
     if (w_dst == w_src && h_dst == h_src) {
-        memcpy(dst, src, w_src * h_src * 2);
+        if (be) {
+            hw2d_swap16(dst, src, w_src * h_src);
+        } else {
+            memcpy(dst, src, w_src * h_src * 2);
+        }
         return;
     }
     for (y = 0; y < h_dst; y++) {
@@ -397,9 +458,22 @@ void hw2d_scale(const uint16_t *src, uint32_t w_src, uint32_t h_src,
             h1 = b0 + (((b1 - b0) * (int)fx) >> 16);
             b = h0 + (((h1 - h0) * (int)fy) >> 16);
 
-            orow[x] = (uint16_t)((r << 11) | (g << 5) | b);
+            uint16_t px = (uint16_t)((r << 11) | (g << 5) | b);
+            orow[x] = be ? (uint16_t)((px >> 8) | (px << 8)) : px;
         }
     }
+}
+
+void hw2d_scale(const uint16_t *src, uint32_t w_src, uint32_t h_src,
+                uint16_t *dst, uint32_t w_dst, uint32_t h_dst)
+{
+    scale_impl(src, w_src, h_src, dst, w_dst, h_dst, false);
+}
+
+void hw2d_scale_be(const uint16_t *src, uint32_t w_src, uint32_t h_src,
+                   uint16_t *dst, uint32_t w_dst, uint32_t h_dst)
+{
+    scale_impl(src, w_src, h_src, dst, w_dst, h_dst, true);
 }
 
 /* ================================================================== */
@@ -537,5 +611,19 @@ void hw2d_scale_stat(const uint16_t *src, uint32_t w_src, uint32_t h_src,
 esp_err_t hw2d_init(void)
 {
     hw2d_stats_reset();
+
+#if HW2D_HAVE_PIE
+    if (!s_pie_mtx) s_pie_mtx = xSemaphoreCreateMutex();
+    /* PIE swap16 开机自测: 与标量参考逐位比对, 不一致自动回退标量。
+     * (盲写汇编的保险丝 —— 真机日志 [EV] simd pie_swap=1 才算生效) */
+    static __attribute__((aligned(16))) uint16_t t_src[24];
+    static __attribute__((aligned(16))) uint16_t t_pie[24];
+    uint16_t t_ref[24];
+    for (int i = 0; i < 24; i++) t_src[i] = (uint16_t)(0xA050 + i * 0x0123);
+    swap16_c(t_ref, t_src, 24);
+    hw2d_pie_swap16_blk(t_pie, t_src, 3);    /* 3 x 8 像素 */
+    s_pie_swap_ok = (memcmp(t_pie, t_ref, sizeof(t_ref)) == 0);
+    printf("[EV] simd pie_swap=%d\n", (int)s_pie_swap_ok);
+#endif
     return ESP_OK;
 }

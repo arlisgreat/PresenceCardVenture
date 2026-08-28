@@ -13,9 +13,10 @@
  *   stat (30s 心跳: heap/min_heap/queue/state)
  * 性能埋点:
  *   perf_preview (每秒: fps/render_avg_us/cpu_pct/heap; 帧率红线 C13)
- *   perf_photo   (每次快门: grab/blur/filter/bmp/total ms; 管线时延 C14)
- *   perf_encode  (每次编码: scale/swap/encode ms + bytes)
+ *   perf_photo   (core1 worker: grab/queue/blur/filter/save/total ms; C14)
+ *   perf_encode  (scale_be 融合缩放+字节序 / jpeg 编码 ms + bytes)
  *   perf_feed_decode (好友照片解码 ms)
+ *   simd (开机 PIE 自测: pie_swap=0/1, C15) / photo_drop (连拍拒绝, C16)
  *   算子级明细另见 hw2d_stats_dump 的 30s 汇总 (人读, 不进分析器)
  */
 #pragma once

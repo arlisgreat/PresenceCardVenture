@@ -123,6 +123,27 @@ void hw2d_alpha_blend(uint16_t *dst, const uint16_t *src, uint32_t npix,
 void hw2d_scale(const uint16_t *src, uint32_t w_src, uint32_t h_src,
                 uint16_t *dst, uint32_t w_dst, uint32_t h_dst);
 
+/*
+ * 同 hw2d_scale, 但输出直接写为大端字节序 (JPEG 编码器/相机原生序)。
+ * 与缩放融合为单遍, 消除独立字节交换 pass (JPEG 编码前置处理专用)。
+ */
+void hw2d_scale_be(const uint16_t *src, uint32_t w_src, uint32_t h_src,
+                   uint16_t *dst, uint32_t w_dst, uint32_t h_dst);
+
+/* ------------------------------------------------------------------ */
+/* 16bit 车道字节交换 (RGB565 小端 <-> 大端)                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * dst[i] = byteswap16(src[i])。src/dst 必须分离。
+ * ESP32-S3 上若 PIE 128-bit 路径可用 (开机自测通过) 且两缓冲 16 字节对齐,
+ * 走 PIE 汇编 (8 像素/拍); 否则 64bit 掩码路径 (4 像素/次)。
+ */
+void hw2d_swap16(uint16_t *dst, const uint16_t *src, uint32_t npix);
+
+/* PIE 加速是否生效 (hw2d_init 自测决定; 埋点用) */
+bool hw2d_pie_active(void);
+
 /* ------------------------------------------------------------------ */
 /* 填充 (闪光动画等)                                                   */
 /* ------------------------------------------------------------------ */
