@@ -46,7 +46,7 @@ GC0308 ──DVP──> I2S 并行 DMA ──> PSRAM 双缓冲 fb[0]/fb[1]     (
 ```
 take_photo():
   1. 闪白: hw2d_fill 全屏白 + lv_refr_now (同步刷一帧作快门反馈)
-  2. PSRAM 分配 snap (VGA 600KB)
+  2. 快照池取槽 (QVGA 150KB x3 预分配, 零 malloc)
   3. grab → hw2d_copy 整帧拷出 → release          [grab_ms 埋点]
   4. 组装 photo_job: snap + 尺寸 + 滤镜参数按值快照(含美白 bias)
      + 磨皮/美白值 + 滤镜 API id + seq + 时间戳
@@ -63,11 +63,11 @@ photo_worker 出队 (queue_ms 埋点):
   1. 磨皮   hw2d_blur3x3 (平面拆分+3x3 滑窗+查表除法);
             smooth=0 则 memcpy; OOM 降级存原图
   2. 滤镜   hw2d_apply_filter_exact (逐像素精确, 用快照参数)
-  3. 相册   save_jpg: hw2d_swap16(PIE) → fmt2jpg q90
-            → /sdcard/DCIM/img_<boot>_<seq>.jpg   (boot 前缀防重启覆盖)
+  3. 相册   pvc_jpeg_encode q90 (esp_new_jpeg; 编码器不收 RGB565,
+            内部展开 RGB888) → /sdcard/DCIM/img_<boot>_<seq>.jpg
             [EV] photo_captured
-  4. 上传编码 hw2d_scale_be (VGA→QVGA, 缩放+大端输出融合单遍, 无独立 swap)
-            → fmt2jpg 质量链 90→80→60 (超 100KB 才降档)   [EV] perf_encode
+  4. 上传   帧即 QVGA 零缩放: 复用相册 q90 编码产物 (超 100KB 才
+            降档 80/60 重编)                              [EV] perf_encode
   5. 释放 snap; 成功 → [EV] photo_encoded → pvc_net_enqueue_photo
             → 上传队列 (SD /sdcard/queue 断电补传; 无 SD 降级 PSRAM)
             → 事件位唤醒 net 任务
@@ -78,9 +78,9 @@ net 任务 (core 0) 唤醒 → drain → POST /photos
   → [FW] POST /photos 201 → [EV] upload_sent → web 可见
 ```
 
-**耗时预估**(快门→入队,C14 阈值 warn>3s):磨皮 100–300ms + 滤镜 50–150ms
-+ q90 VGA 编码写卡 300–500ms + 缩放 ~20ms + QVGA 编码 150–400ms ≈ **1–1.5s**,
-全程不阻塞预览。持续连拍能力 ≈ 每 1.5s 一张(队列深 2 刻意限流,防 PSRAM 峰值)。
+**耗时预估**(快门→入队,C14 阈值 warn>3s):QVGA 磨皮 30–80ms + 滤镜
+15–40ms + RGB888 展开+q90 编码 60–150ms + 写卡 <100ms ≈ **0.3–0.5s**,
+全程不阻塞预览(QVGA 统一后较 VGA 时代约快 3 倍)。
 
 ## 并发与资源规则
 
@@ -88,7 +88,7 @@ net 任务 (core 0) 唤醒 → drain → POST /photos
 |---|---|---|
 | hw2d 算子 | `_stat` 带统计版 | 无统计版(计数器跨核累加会竞争) |
 | PIE swap16 | 相册/feed 解码 | save_jpg;**try-lock 互斥**单任务使用,失锁走 C 标量 |
-| 共享缓冲 | `s_preview_qvga` 仅预览 | worker 自备 snap/work/be |
+| 共享缓冲 | canvas 仅预览 | 快照池 3 槽 + worker work/enc 复用 |
 | PSRAM 峰值 | 常驻 ~0.9MB | 2 并发 job ≈2.8MB(8MB 内) |
 | SD/FATFS | 相册读(LVGL 任务) | 相册写+队列写;FATFS 可重入锁 |
 | 相机 | grab/release 仅 LVGL 任务 | 不碰相机(快门段已拷出) |
@@ -100,5 +100,6 @@ net 任务 (core 0) 唤醒 → drain → POST /photos
 2. 队列深 2 的连拍限流是刻意设计;`photo_drop`/C16 统计被拒次数。
 3. 编码期(core 1)与预览(core 0)并行压 PSRAM 总线,拍后 ~1.5s 窗口内预览
    帧率可能小幅下降 —— `perf_preview` 样本量化,明显掉帧再给 worker 节流。
-4. 两处字节序假设(上传 `scale_be`、显示 feed swap):host 单测已证数学等价,
-   方向正确性以真机颜色为准;PIE 汇编由开机自测背书(`[EV] simd pie_swap=1`)。
+4. 字节序已由 QEMU 仿真定案:esp_new_jpeg 编码走 RGB888 展开 (不收 RGB565),
+   jpg2rgb565 解码输出小端直用 (纯色哨兵实证);唯余相机 fb 输出序待真机
+   一验 (预览颜色即答案)。PIE 汇编由开机自测背书(`[EV] simd pie_swap=1`)。
