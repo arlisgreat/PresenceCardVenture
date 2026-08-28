@@ -242,7 +242,18 @@ function MessagesView({ onToast, initialCode = '' }: { onToast: (message: string
   useEffect(() => { void getMessages(friend).then(setMessages) }, [friend])
   useEffect(() => { void Promise.all([getFriends(), getFriendRequests()]).then(([items, incoming]) => { if (items.length) { setFriends(items); setFriend(current => items.some(item => item.username === current) ? current : items[0].username) }; setRequests(incoming) }) }, [])
   useEffect(() => { void getCurrentUser().then(user => { setInviteCode(user.friend_code); setInviteUrl(buildInviteUrl(user.friend_code, window.location.origin)) }).catch(() => { setInviteUrl(buildInviteUrl(inviteCode, window.location.origin)) }) }, [])
-  async function send() { const body = draft.trim(); if (!body) return; const message = await sendMessage(friend, body); setMessages(current => [...current, message]); setDraft(''); onToast('轻信号已送达') }
+  async function send() {
+    const body = draft.trim()
+    if (!body) return
+    try {
+      const message = await sendMessage(friend, body)
+      setMessages(current => [...current, message])
+      setDraft('')
+      onToast('轻信号已送达')
+    } catch {
+      onToast('轻信号暂时没有送达，请重试')
+    }
+  }
   async function sendImage(file: File | undefined) {
     if (!file) return
     setUploading(true)

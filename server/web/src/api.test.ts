@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getFeed, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getFeed, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
   const originalFetch = globalThis.fetch
@@ -40,6 +40,16 @@ test('feed keeps seeded asset identity when a new photo changes server ordering'
     const feed = await getFeed()
     assert.equal(feed[1].image_url, '/assets/feed-window.jpg')
     assert.equal(feed[2].image_url, '/assets/feed-portrait.jpg')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('message sending propagates API errors instead of fabricating a local success', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: { code: 'MESSAGE_UNAVAILABLE' } }), { status: 503 })) as typeof fetch
+  try {
+    await assert.rejects(() => sendMessage('momo', '还在吗'), /MESSAGE_UNAVAILABLE|Request failed: 503/)
   } finally {
     globalThis.fetch = originalFetch
   }

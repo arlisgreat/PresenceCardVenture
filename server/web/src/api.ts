@@ -232,7 +232,8 @@ export async function acceptFriendRequest(id: string): Promise<FriendRequest> {
 }
 
 export async function sendMessage(friend: string, body: string, photoId?: string): Promise<Message> {
-  try { return await request<Message>('/messages', { method: 'POST', body: JSON.stringify({ friend, body, photo_id: photoId }) }) } catch {
+  try { return await request<Message>('/messages', { method: 'POST', body: JSON.stringify({ friend, body, photo_id: photoId }) }) } catch (error) {
+    if (!(error instanceof TypeError)) throw error
     return { id: `m-${Date.now()}`, sender: 'me', senderName: '我', body, createdAt: new Date().toISOString(), kind: photoId ? 'image' : 'text', photo_id: photoId, image_url: photoId && !photoId.startsWith('local-') ? `/v1/photos/${photoId}/image` : undefined }
   }
 }
