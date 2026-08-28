@@ -21,12 +21,30 @@ model User {
   devices              Device[]
   photos               Photo[]
   reactions            Reaction[]
-  friendshipsRequested Friendship[]   @relation("requester")
-  friendshipsReceived  Friendship[]   @relation("addressee")
+  sessions             Session[]
+  messagesSent         Message[]       @relation("messageSender")
+  messagesReceived     Message[]       @relation("messageRecipient")
+  aiJobs               AiJob[]
+  friendshipsRequested Friendship[]    @relation("requester")
+  friendshipsReceived  Friendship[]    @relation("addressee")
   offlineTickets       OfflineTicket[] @relation("ticketOwner")
   claimedTickets       OfflineTicket[] @relation("ticketClaimer")
 
   @@map("users")
+}
+
+/// Web 登录会话；只保存 token hash，明文凭证由会话签发层持有。
+model Session {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
 }
 
 model Device {
@@ -84,21 +102,70 @@ model Friendship {
 }
 
 model Photo {
-  id        String   @id @default(uuid()) @db.Uuid
-  authorId  String   @db.Uuid
-  author    User     @relation(fields: [authorId], references: [id])
-  ossKey    String // photos/{author_id}/{photo_id}.jpg
-  filterId  String   @default("none") // 滤镜清单见 docs/02 §5
-  caption   String? // ≤ 140 字符
-  width     Int
-  height    Int
-  sizeBytes Int
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid()) @db.Uuid
+  authorId       String   @db.Uuid
+  author         User     @relation(fields: [authorId], references: [id])
+  ossKey         String // photos/{author_id}/{photo_id}.jpg
+  originalOssKey String? // 原图对象；处理后的 ossKey 仍作为默认展示对象
+  filterId       String   @default("none") // 滤镜清单见 docs/02 §5
+  playType       String   @default("ccd")
+  beauty         Int      @default(0)
+  sticker        String   @default("none")
+  circle         String   @default("小圈")
+  caption        String? // ≤ 140 字符
+  width          Int
+  height         Int
+  sizeBytes      Int
+  createdAt      DateTime @default(now())
 
-  reactions Reaction[]
+  reactions          Reaction[]
+  messages           Message[]
+  aiResults          AiJob[]    @relation("aiResult")
+  aiPublishedResults AiJob[]    @relation("aiPublished")
 
   @@index([authorId, createdAt(sort: Desc)])
   @@map("photos")
+}
+
+model Message {
+  id        String   @id @default(uuid()) @db.Uuid
+  fromId    String   @db.Uuid
+  from      User     @relation("messageSender", fields: [fromId], references: [id])
+  toId      String   @db.Uuid
+  to        User     @relation("messageRecipient", fields: [toId], references: [id])
+  photoId   String?  @db.Uuid
+  photo     Photo?   @relation(fields: [photoId], references: [id])
+  text      String?
+  createdAt DateTime @default(now())
+
+  @@index([fromId, toId, createdAt])
+  @@index([toId, fromId, createdAt])
+  @@map("messages")
+}
+
+enum AiJobStatus {
+  queued
+  processing
+  completed
+  failed
+}
+
+model AiJob {
+  id               String      @id @default(uuid()) @db.Uuid
+  ownerId          String      @db.Uuid
+  owner            User        @relation(fields: [ownerId], references: [id])
+  materialIds      Json
+  provider         String?
+  status           AiJobStatus @default(queued)
+  resultPhotoId    String?     @db.Uuid
+  resultPhoto      Photo?      @relation("aiResult", fields: [resultPhotoId], references: [id])
+  publishedPhotoId String?     @db.Uuid
+  publishedPhoto   Photo?      @relation("aiPublished", fields: [publishedPhotoId], references: [id])
+  error            String?
+  createdAt        DateTime    @default(now())
+
+  @@index([ownerId, createdAt(sort: Desc)])
+  @@map("ai_jobs")
 }
 
 enum ReactionType {

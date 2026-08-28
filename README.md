@@ -45,4 +45,4 @@ npm --prefix server/web run dev -- --host 0.0.0.0 --port 5173
 
 浏览器打开 `http://localhost:5173`。Demo API 使用预置身份 `demo-token`，无需真实账号或云端密钥即可走通主流程。上传图片会写入 `server/api/uploads/`，该目录已被 Git 忽略。
 
-生产部署前需要替换 DemoStore、本地文件适配器和本地 AI 适配器，并注入 PostgreSQL、OSS、任务队列、HTTPS 域名和模型服务配置；设备端继续使用 `/v1` 契约。CI 会在 `main` 和 `codex/**` 分支自动执行 API 测试、构建和 Prisma schema 校验。
+生产部署前需要替换 DemoStore、本地文件适配器和本地 AI 适配器，并注入 PostgreSQL、OSS、任务队列、HTTPS 域名和模型服务配置；初始 Prisma migration 已在 `server/api/prisma/migrations/0001_initial_schema/`，但 API 仍需接入真实 Prisma store adapter 后才能通过生产 readiness。设备端继续使用 `/v1` 契约。CI 会在 `main` 和 `codex/**` 分支自动执行 API 测试、构建和 Prisma schema 校验。
