@@ -5,6 +5,7 @@ import { acknowledgeDeviceConfig, queueDeviceConfig, type DeviceConfigSyncState 
 import { parseDeviceSession, serializeDeviceSession } from './device-session'
 import { buildInviteUrl, readInviteCode } from './invite'
 import { runAction } from './action-result'
+import { fetchWithUserSession } from './user-session'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -50,7 +51,7 @@ function ProtectedImage({ src, alt, className }: { src: string; alt: string; cla
       return () => {}
     }
     let cancelled = false
-    void fetch(src, { headers: { Authorization: 'Bearer demo-token' } })
+    void fetchWithUserSession(src)
       .then(response => response.ok ? response.blob() : Promise.reject(new Error('image request failed')))
       .then(blob => {
         if (cancelled) return

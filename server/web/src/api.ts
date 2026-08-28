@@ -1,3 +1,5 @@
+import { fetchWithUserSession } from './user-session.js'
+
 export type PlayType = 'beauty' | 'ccd' | 'template'
 
 export type FeedItem = {
@@ -135,7 +137,12 @@ async function requestWithToken<T>(path: string, token: string, init?: RequestIn
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestWithToken<T>(path, 'demo-token', init)
+  const headers = new Headers(init?.headers)
+  if (init?.body) headers.set('Content-Type', 'application/json')
+  const response = await fetchWithUserSession(`${API}${path}`, { ...init, headers })
+  if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`)
+  if (response.status === 204) return undefined as T
+  return response.json() as Promise<T>
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
@@ -157,7 +164,7 @@ export async function uploadPhoto(file: File, options: { filterId: string; capti
     const processed = await jpegPayload(file, options)
     const payload = processed.blob
     const circle = options.circle ?? '小圈'
-    const response = await fetch(`${API}/photos`, { method: 'POST', body: payload, headers: { Authorization: 'Bearer demo-token', 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Circle': encodeURIComponent(circle), 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
+    const response = await fetchWithUserSession(`${API}/photos`, { method: 'POST', body: payload, headers: { 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Circle': encodeURIComponent(circle), 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
     if (!response.ok) throw new ApiError(response.status, (await response.text()) || `Request failed: ${response.status}`)
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
     const imageUrl = result.url ?? localUrl

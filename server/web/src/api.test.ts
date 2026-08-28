@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getFeed, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { clearUserToken, setUserToken } from './user-session.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
   const originalFetch = globalThis.fetch
@@ -15,6 +16,42 @@ test('current user helper reads the authenticated profile and friend code', asyn
     assert.deepEqual(request, { url: '/v1/me', authorization: 'Bearer demo-token' })
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('selected browser session authenticates both JSON requests and photo uploads', async () => {
+  const originalFetch = globalThis.fetch
+  const originalCreateObjectUrl = URL.createObjectURL
+  const originalRevokeObjectUrl = URL.revokeObjectURL
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+  } as Storage
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+  const authorizations: Array<string | null> = []
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    authorizations.push(new Headers(init?.headers).get('Authorization'))
+    if (authorizations.length === 1) return new Response(JSON.stringify({ id: 'u_demo_2', username: 'momo', display_name: '墨墨', friend_code: '100002' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ photo_id: 'p_session_test', url: '/v1/photos/p_session_test/image', created_at: '2026-08-28T00:00:00.000Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  URL.createObjectURL = (() => 'blob:session-test') as typeof URL.createObjectURL
+  URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
+  try {
+    setUserToken('demo-user-2')
+    const user = await getCurrentUser()
+    await uploadPhoto(new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'session.jpg', { type: 'image/jpeg' }), { filterId: 'none', caption: '会话边界', play: 'beauty', beauty: 0, sticker: 'none' })
+    assert.equal(user.username, 'momo')
+    assert.deepEqual(authorizations, ['Bearer demo-user-2', 'Bearer demo-user-2'])
+  } finally {
+    clearUserToken()
+    globalThis.fetch = originalFetch
+    URL.createObjectURL = originalCreateObjectUrl
+    URL.revokeObjectURL = originalRevokeObjectUrl
+    if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor)
+    else delete (globalThis as typeof globalThis & { localStorage?: Storage }).localStorage
   }
 })
 
