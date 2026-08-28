@@ -7,6 +7,7 @@ export type PhotoClient = {
     delete(args: any): Promise<any>
   }
   idempotencyKey: {
+    create?(args: any): Promise<any>
     findUnique(args: any): Promise<any>
   }
 }
@@ -64,6 +65,9 @@ export class PrismaPhotoRepository implements PhotoMetadataRepository {
         createdAt: new Date(photo.createdAt),
       },
     })
+    if (photo.idempotencyKey && photo.deviceId && this.client.idempotencyKey.create) {
+      await this.client.idempotencyKey.create({ data: { deviceId: photo.deviceId, key: photo.idempotencyKey, photoId: photo.id } })
+    }
   }
 
   async findById(id: string): Promise<Photo | undefined> {

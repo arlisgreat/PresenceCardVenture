@@ -30,6 +30,7 @@ function fakePrisma(record: any = null) {
       delete: async (args: any) => { calls.push({ method: 'delete', args }); return record },
     },
     idempotencyKey: {
+      create: async (args: any) => { calls.push({ method: 'idempotency.create', args }); return args.data },
       findUnique: async (args: any) => { calls.push({ method: 'idempotency.findUnique', args }); return record ? { photo: record } : null },
     },
   }
@@ -60,6 +61,7 @@ test('persists photo metadata and derives stable OSS keys', async () => {
       },
     },
   })
+  assert.deepEqual(client.calls[1], { method: 'idempotency.create', args: { data: { deviceId: 'web', key: 'web-1', photoId: photo.id } } })
 })
 
 test('maps persisted records and looks up an upload by device idempotency key', async () => {
@@ -79,4 +81,3 @@ test('deletes metadata by photo id', async () => {
   await new PrismaPhotoRepository(client as any).remove(photo.id)
   assert.deepEqual(client.calls[0], { method: 'delete', args: { where: { id: photo.id } } })
 })
-
