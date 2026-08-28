@@ -267,11 +267,11 @@ def run_checks(ev, http, sleeps, boots, panics):
             return [int(d[k]) for d in rows if k in d]
         totals = col(photos, "total_ms")
         lines = [
-            "grab avg=%dms  blur avg=%dms  filter avg=%dms  bmp avg=%dms" % (
+            "grab avg=%dms  blur avg=%dms  filter avg=%dms  save avg=%dms" % (
                 statistics.mean(col(photos, "grab_ms") or [0]),
                 statistics.mean(col(photos, "blur_ms") or [0]),
                 statistics.mean(col(photos, "filter_ms") or [0]),
-                statistics.mean(col(photos, "bmp_ms") or [0])),
+                statistics.mean(col(photos, "save_ms") or [0])),
         ]
         if encs:
             lines.append("scale avg=%dms  swap avg=%dms  jpeg avg=%dms  avg %dKB" % (

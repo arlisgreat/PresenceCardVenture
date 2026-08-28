@@ -281,96 +281,83 @@ static void update_thumbs(const uint16_t *src)
     }
 }
 
-/* ================= BMP 加载 (24bit BGR, 自下而上) ================= */
-static int load_bmp_565(const char *path, uint16_t *out, uint32_t *ow, uint32_t *oh)
+/* ================= 相册 JPEG 存取 ================= */
+static bool jpeg_dims(const uint8_t *jpg, size_t len, uint32_t *w, uint32_t *h);
+
+/* RGB565 (小端) -> 高质量 JPEG 落盘。fmt2jpg 为软编码 (S3 无 JPEG 硬件)。 */
+static bool save_jpg(const char *path, const uint16_t *rgb565_buf,
+                     uint32_t w, uint32_t h, uint8_t quality)
 {
-    FILE *f = fopen(path, "rb");
-    uint8_t hdr[54], *row;
-    uint32_t row_size, w, h;
-    int32_t y;
-
-    if (!f) return -1;
-    if (fread(hdr, 1, 54, f) != 54 || hdr[0] != 'B' || hdr[1] != 'M') {
-        fclose(f);
-        return -1;
+    uint32_t bytes = w * h * 2;
+    uint8_t *be = PSRAM_MALLOC(bytes);
+    if (!be) return false;
+    const uint8_t *le = (const uint8_t *)rgb565_buf;
+    for (uint32_t i = 0; i < bytes; i += 2) {
+        be[i]     = le[i + 1];
+        be[i + 1] = le[i];
     }
-    /* 非对齐安全读取 (Xtensa l32ai 要求 4 字节对齐, 禁止直接解引用 hdr+N) */
-    uint16_t bpp;
-    int32_t h_signed;
-    memcpy(&w, hdr + 18, 4);
-    memcpy(&h_signed, hdr + 22, 4);
-    h = (h_signed < 0) ? (uint32_t)(-h_signed)   /* 负高度 = 自下而上, 取绝对值 */
-                       : (uint32_t)h_signed;
-    memcpy(&bpp, hdr + 28, 2);
-    if (bpp != 24) {                            /* 仅支持 24bit */
-        fclose(f);
-        return -1;
-    }
-    row_size = ((w * 3 + 3) / 4) * 4;
-    *ow = w;
-    *oh = h;
+    uint8_t *jpg = NULL;
+    size_t jlen = 0;
+    bool ok = fmt2jpg(be, bytes, (uint16_t)w, (uint16_t)h,
+                      PIXFORMAT_RGB565, quality, &jpg, &jlen);
+    PSRAM_FREE(be);
+    if (!ok || !jpg) return false;
 
-    row = PSRAM_MALLOC(row_size);
-    if (!row) { fclose(f); return -1; }
-
-    /* BMP 自下而上存储 */
-    for (y = (int32_t)h - 1; y >= 0; y--) {
-        uint32_t iy = (uint32_t)y;
-        uint32_t x;
-        if (fseek(f, 54 + (long)iy * row_size, SEEK_SET) != 0 ||
-            fread(row, 1, row_size, f) != row_size) {
-            PSRAM_FREE(row);
-            fclose(f);
-            return -1;
-        }
-        for (x = 0; x < w; x++) {
-            uint8_t b = row[x * 3], g = row[x * 3 + 1], r = row[x * 3 + 2];
-            out[iy * w + x] = rgb565(r, g, b);
-        }
-    }
-    PSRAM_FREE(row);
-    fclose(f);
-    return 0;
+    FILE *fp = fopen(path, "wb");
+    ok = fp && fwrite(jpg, 1, jlen, fp) == jlen;
+    if (fp) fclose(fp);
+    free(jpg);
+    if (!ok) ESP_LOGE(TAG, "save %s failed", path);
+    return ok;
 }
 
-/* ================= BMP 保存 ================= */
-static void save_bmp(const char *path, const uint16_t *rgb565_buf,
-                     uint32_t w, uint32_t h)
+/*
+ * JPEG 文件 -> RGB565 (小端)。利用 TJpgDec 的 1/2、1/4、1/8 降尺度解码:
+ * 选能放进 maxw x maxh 的最小缩放档, 缩略图无需全尺寸解码 (快 4-10 倍)。
+ * out 容量须 >= maxw x maxh x 2 字节; 实际尺寸经 ow/oh 出参返回。
+ */
+static int load_jpg_565(const char *path, uint16_t *out, uint32_t maxw,
+                        uint32_t maxh, uint32_t *ow, uint32_t *oh)
 {
-    FILE *fp = fopen(path, "wb");
-    if (!fp) { ESP_LOGE(TAG, "open %s failed", path); return; }
-
-    uint32_t row_size = ((w * 3 + 3) / 4) * 4;
-    uint32_t data_size = row_size * h;
-    uint8_t hdr[54] = { 0 };
-    uint32_t u32;
-    int32_t i32;
-    uint16_t u16;
-    hdr[0] = 'B'; hdr[1] = 'M';
-    u32 = 54 + data_size; memcpy(hdr + 2,  &u32, 4);
-    u32 = 54;              memcpy(hdr + 10, &u32, 4);
-    u32 = 40;              memcpy(hdr + 14, &u32, 4);
-    i32 = (int32_t)w;      memcpy(hdr + 18, &i32, 4);
-    i32 = (int32_t)h;      memcpy(hdr + 22, &i32, 4);
-    u16 = 1;               memcpy(hdr + 26, &u16, 2);
-    u16 = 24;              memcpy(hdr + 28, &u16, 2);
-    u32 = data_size;       memcpy(hdr + 34, &u32, 4);
-    fwrite(hdr, 1, 54, fp);
-
-    uint8_t *row = PSRAM_MALLOC(row_size);
-    if (!row) { fclose(fp); return; }
-    for (int32_t y = (int32_t)h - 1; y >= 0; y--) {
-        const uint16_t *line = rgb565_buf + (uint32_t)y * w;
-        for (uint32_t x = 0; x < w; x++) {
-            uint16_t c = line[x];
-            row[x * 3 + 0] = (uint8_t)((c & 0x1F) << 3);
-            row[x * 3 + 1] = (uint8_t)(((c >> 5) & 0x3F) << 2);
-            row[x * 3 + 2] = (uint8_t)(((c >> 11) & 0x1F) << 3);
-        }
-        fwrite(row, 1, row_size, fp);
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz > 256 * 1024) { fclose(f); return -1; }
+    uint8_t *jbuf = PSRAM_MALLOC((size_t)sz);
+    if (!jbuf || fread(jbuf, 1, (size_t)sz, f) != (size_t)sz) {
+        if (jbuf) PSRAM_FREE(jbuf);
+        fclose(f);
+        return -1;
     }
-    PSRAM_FREE(row);
-    fclose(fp);
+    fclose(f);
+
+    uint32_t w = 0, h = 0;
+    int s;
+    if (!jpeg_dims(jbuf, (size_t)sz, &w, &h)) { PSRAM_FREE(jbuf); return -1; }
+    for (s = 0; s <= 3; s++) {
+        if ((w >> s) <= maxw && (h >> s) <= maxh) break;
+    }
+    if (s > 3) { PSRAM_FREE(jbuf); return -1; }
+    uint32_t dw = w >> s, dh = h >> s;
+
+    uint8_t *be = PSRAM_MALLOC(dw * dh * 2);
+    bool ok = be && jpg2rgb565(jbuf, (size_t)sz, be, (esp_jpeg_image_scale_t)s);
+    PSRAM_FREE(jbuf);
+    if (!ok) {
+        if (be) PSRAM_FREE(be);
+        return -1;
+    }
+    uint8_t *le = (uint8_t *)out;
+    for (uint32_t i = 0; i < dw * dh * 2; i += 2) {
+        le[i]     = be[i + 1];
+        le[i + 1] = be[i];
+    }
+    PSRAM_FREE(be);
+    *ow = dw;
+    *oh = dh;
+    return 0;
 }
 
 /* ================= 上传 (Presence Card 规范 §2) ================= */
@@ -409,7 +396,8 @@ static void upload_photo_qvga(const uint16_t *src, uint32_t w, uint32_t h)
 
     uint8_t *jpg = NULL;
     size_t jlen = 0;
-    static const uint8_t k_qualities[] = { 80, 50 };  /* fmt2jpg: 0-100 越大越好 */
+    /* 高质量优先, 超 100KB 上限才逐档降 (fmt2jpg: 0-100 越大越好) */
+    static const uint8_t k_qualities[] = { 90, 80, 60 };
     for (unsigned qi = 0; qi < sizeof(k_qualities); qi++) {
         if (jpg) { free(jpg); jpg = NULL; }
         if (!fmt2jpg(be, FRAME_BYTES, UI_W, UI_H, PIXFORMAT_RGB565,
@@ -489,23 +477,23 @@ static void take_photo(void)
     hw2d_filter_exact_stat(snap, work, pw * ph, &s_active_filter);
     int64_t t_filter = esp_timer_get_time();
 
-    /* 保存 (VGA 640x480) */
+    /* 保存 (VGA 640x480, 高质量 JPEG q90; BMP 600KB -> JPEG ~100KB, 写卡快一个量级) */
     mkdir("/sdcard/DCIM", 0755);
     char path[64];
     static uint32_t seq = 0;
-    snprintf(path, sizeof(path), "/sdcard/DCIM/img_%05lu.bmp", (unsigned long)seq++);
-    save_bmp(path, snap, pw, ph);
-    int64_t t_bmp = esp_timer_get_time();
-    PVC_EV("photo_captured w=%lu h=%lu file=img_%05lu.bmp",
+    snprintf(path, sizeof(path), "/sdcard/DCIM/img_%05lu.jpg", (unsigned long)seq++);
+    save_jpg(path, snap, pw, ph, 90);
+    int64_t t_save = esp_timer_get_time();
+    PVC_EV("photo_captured w=%lu h=%lu file=img_%05lu.jpg",
            (unsigned long)pw, (unsigned long)ph, (unsigned long)(seq - 1));
 
     /* 上传闭环: 降采样 320x240 -> JPEG -> 幂等待传队列 (docs/02 §2) */
     upload_photo_qvga(snap, pw, ph);
 
     /* 快门到入队的分段耗时 (scale/swap/encode 细分在 perf_encode) */
-    PVC_EV("perf_photo grab_ms=%d blur_ms=%d filter_ms=%d bmp_ms=%d total_ms=%d",
+    PVC_EV("perf_photo grab_ms=%d blur_ms=%d filter_ms=%d save_ms=%d total_ms=%d",
            (int)((t_grab - t0) / 1000), (int)((t_blur - t_grab) / 1000),
-           (int)((t_filter - t_blur) / 1000), (int)((t_bmp - t_filter) / 1000),
+           (int)((t_filter - t_blur) / 1000), (int)((t_save - t_filter) / 1000),
            (int)((esp_timer_get_time() - t0) / 1000));
 
     PSRAM_FREE(snap);
@@ -694,12 +682,12 @@ static void album_show_full(int item)
     uint16_t *tmp;
 
     if (!s_view_buf || !s_view_canvas) return;
-    tmp = PSRAM_MALLOC(CAP_BYTES);   /* VGA 照片 614KB */
+    tmp = PSRAM_MALLOC(FRAME_BYTES);  /* VGA JPEG 以 1/2 档解码, 恰为 320x240 */
     if (!tmp) {
         toast_show("内存不足");
         return;
     }
-    if (load_bmp_565(s_album_paths[item], tmp, &w, &h) != 0) {
+    if (load_jpg_565(s_album_paths[item], tmp, UI_W, UI_H, &w, &h) != 0) {
         PSRAM_FREE(tmp);
         toast_show("读取失败");
         return;
@@ -737,7 +725,7 @@ static void open_album(void)
     d = opendir("/sdcard/DCIM");
     if (!d) return;
     while (n < MAX_ALBUM_ITEMS && (ent = readdir(d)) != NULL) {
-        if (strstr(ent->d_name, ".bmp") || strstr(ent->d_name, ".BMP")) {
+        if (strstr(ent->d_name, ".jpg") || strstr(ent->d_name, ".JPG")) {
             /* 限长复制文件名, 防止 snprintf 截断 (-Werror=format-truncation) */
             char name[48];
             strncpy(name, ent->d_name, sizeof(name) - 1);
@@ -755,9 +743,10 @@ static void open_album(void)
         if (!cell) continue;
         if (i < n && s_album_bufs[i]) {
             uint32_t w, h;
-            uint16_t *tmp = PSRAM_MALLOC(CAP_BYTES);   /* VGA 照片 614KB */
+            /* 1/4 档解码 (VGA -> 160x120) 再缩到 96x72, 免全尺寸解码 */
+            uint16_t *tmp = PSRAM_MALLOC(160 * 120 * 2);
             if (tmp) {
-                if (load_bmp_565(s_album_paths[i], tmp, &w, &h) == 0) {
+                if (load_jpg_565(s_album_paths[i], tmp, 160, 120, &w, &h) == 0) {
                     /* 源=tmp, 目标=缩略缓冲 (分离) */
                     hw2d_scale_stat(tmp, w, h, s_album_bufs[i], 96, 72);
                 }
