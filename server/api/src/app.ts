@@ -25,12 +25,16 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
   app.get('/health', async () => ({ status:'ok', service:'presence-card-api', version:'0.1.0' }))
   app.get('/health/ready', async (_request, reply) => {
     const aiProvider = String(process.env.AI_PROVIDER ?? '').trim().toLowerCase()
+    const persistenceProvider = String(process.env.PERSISTENCE_PROVIDER ?? '').trim().toLowerCase()
+    const persistenceAdapter = String((store as DemoStore & { provider?: string }).provider ?? '').trim().toLowerCase()
     const checks = {
       database: Boolean(process.env.DATABASE_URL),
       object_storage: Boolean(process.env.OSS_BUCKET || process.env.OBJECT_STORAGE_BUCKET),
       ai_provider: Boolean(aiProvider && !['demo', 'local', 'simulator'].includes(aiProvider)),
+      persistence_provider: persistenceProvider === 'prisma',
+      persistence_adapter: persistenceProvider === 'prisma' && persistenceAdapter === 'prisma',
     }
-    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : 'DATABASE_URL')
+    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : name === 'persistence_provider' ? 'PERSISTENCE_PROVIDER' : name === 'persistence_adapter' ? 'PRISMA_STORE_ADAPTER' : 'DATABASE_URL')
     const ready = !requireProductionServices || missing.length === 0
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ready' : 'blocked', mode: requireProductionServices ? 'production' : 'demo', checks, missing })
   })

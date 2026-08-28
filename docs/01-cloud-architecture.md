@@ -25,7 +25,7 @@
 - `GET /health` 是存活探针，只表示 Fastify 进程可响应。
 - `GET /health/ready` 是就绪探针；开发模式返回 `200` 并标注 `mode=demo`。
 - API 每个响应都会返回 `X-Request-Id`（合法客户端 id 会被保留，否则由服务端生成），并附带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY` 与严格的 `Referrer-Policy`，便于链路排查并降低浏览器侧风险。
-- 生产启动时设置 `REQUIRE_PRODUCTION_SERVICES=true`（或 `NODE_ENV=production`），就绪探针会要求 `DATABASE_URL`、`OSS_BUCKET`（或 `OBJECT_STORAGE_BUCKET`）和非模拟的 `AI_PROVIDER`，缺项返回 `503`，避免误把 DemoStore 部署为生产服务。
+- 生产启动时设置 `REQUIRE_PRODUCTION_SERVICES=true`（或 `NODE_ENV=production`），就绪探针会要求 `DATABASE_URL`、`OSS_BUCKET`（或 `OBJECT_STORAGE_BUCKET`）、非模拟的 `AI_PROVIDER` 和 `PERSISTENCE_PROVIDER=prisma`，并检查运行时实际注入的 store adapter；缺项返回 `503`，避免误把 DemoStore 部署为生产服务。当前仓库仍只实现 DemoStore，即使配置 Prisma provider 也会因 `PRISMA_STORE_ADAPTER` 缺失而阻断，直到 Prisma store adapter 完成，不会把内存数据伪装成生产持久化。
 - Caddy 在 `APP_DOMAIN` 下将 `/v1/*` 同域反代到 API，并为 React Router 路径回退到 `index.html`；这样 Web 的相对 API 地址在开发和生产都保持一致。
 - Compose 的 `deploy/.env` 同时注入 API 与 PostgreSQL；容器内 `DATABASE_URL` 必须使用 `db` 主机名，不能照搬本机 `localhost` 配置。
 

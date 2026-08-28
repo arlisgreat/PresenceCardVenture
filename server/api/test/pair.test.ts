@@ -17,7 +17,38 @@ test('exposes a readiness probe that blocks incomplete production configuration'
   assert.equal(blocked.statusCode, 503)
   assert.equal(blocked.json().status, 'blocked')
   assert.ok(blocked.json().missing.includes('DATABASE_URL'))
+  assert.ok(blocked.json().missing.includes('PERSISTENCE_PROVIDER'))
   await production.close()
+})
+
+test('production readiness stays blocked when Prisma is configured without a Prisma store adapter', async () => {
+  const previous = {
+    database: process.env.DATABASE_URL,
+    bucket: process.env.OSS_BUCKET,
+    ai: process.env.AI_PROVIDER,
+    persistence: process.env.PERSISTENCE_PROVIDER,
+  }
+  process.env.DATABASE_URL = 'postgresql://postgres:secret@db:5432/presence'
+  process.env.OSS_BUCKET = 'presence-production'
+  process.env.AI_PROVIDER = 'replicate'
+  process.env.PERSISTENCE_PROVIDER = 'prisma'
+  try {
+    const production = await buildApp({ uploadsDir: '/tmp/presence-card-test-ready-adapter', requireProductionServices: true })
+    const blocked = await production.inject({ method: 'GET', url: '/health/ready' })
+    assert.equal(blocked.statusCode, 503)
+    assert.equal(blocked.json().checks.persistence_adapter, false)
+    assert.ok(blocked.json().missing.includes('PRISMA_STORE_ADAPTER'))
+    await production.close()
+  } finally {
+    if (previous.database === undefined) delete process.env.DATABASE_URL
+    else process.env.DATABASE_URL = previous.database
+    if (previous.bucket === undefined) delete process.env.OSS_BUCKET
+    else process.env.OSS_BUCKET = previous.bucket
+    if (previous.ai === undefined) delete process.env.AI_PROVIDER
+    else process.env.AI_PROVIDER = previous.ai
+    if (previous.persistence === undefined) delete process.env.PERSISTENCE_PROVIDER
+    else process.env.PERSISTENCE_PROVIDER = previous.persistence
+  }
 })
 
 test('pairs a device after a user binds its short-lived code', async () => {

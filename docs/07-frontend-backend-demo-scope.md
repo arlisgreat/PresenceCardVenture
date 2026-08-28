@@ -89,6 +89,7 @@
 - Web 会话边界：JSON 请求、照片上传和受保护图片统一通过 `user-session` 取得用户凭证；本地可保存演示身份，`VITE_PRESENCE_USER_TOKEN` 可覆盖默认值，ESP32/device token 仍由设备请求显式传入。`demo-token` 仅用于可直接运行的种子 Demo，真实生产仍需接入登录、会话签发、过期与撤销机制。
 - Web 会话验收：浏览器切换为 `demo-user-2` 后，轻信号页读取到该账号的好友码 `100002`；清除本地会话后恢复默认 Demo。桌面 1280px 与移动 390px 均无横向溢出，4 张 Feed 图片完整加载且控制台无错误。
 - 读取错误边界：Feed、消息、好友请求和用户侧设备状态仅在浏览器无法连接 API 时使用本地 Demo 数据；服务端返回 `401/403/429/5xx` 时保留真实失败，并由页面显示连接或登录状态提示，不再用种子内容掩盖会话失效。
+- 生产持久化门禁：`/health/ready` 在生产模式额外要求 `PERSISTENCE_PROVIDER=prisma` 且运行时必须注入真正的 Prisma store adapter；当前 API 尚未把 Prisma store adapter 接入路由，即使环境变量齐全也会因 `PRISMA_STORE_ADAPTER` 返回 `503`，避免将 `DemoStore` 误切到生产。
 
 ## 待确认问题
 

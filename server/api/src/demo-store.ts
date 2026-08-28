@@ -11,6 +11,7 @@ export type FriendRequest = { id: string; requesterId: string; addresseeId: stri
 export type DeviceConfig = { id: string; filter_id: string; play_type: string; beauty: number; sticker: string; updated_at: string }
 
 export class DemoStore {
+  readonly provider = 'demo' as const
   readonly uploadDailyLimit: number
   users = new Map<string, User>()
   tokens = new Map<string, string>()
