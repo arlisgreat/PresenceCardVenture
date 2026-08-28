@@ -21,7 +21,9 @@ services:
         condition: service_healthy
 
   api:
-    build: ../api
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
     restart: always
     env_file: .env                # DATABASE_URL 指向 db:5432
     depends_on: [db]

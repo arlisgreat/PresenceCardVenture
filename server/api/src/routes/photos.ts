@@ -4,6 +4,7 @@ import { DemoStore, errorBody } from '../demo-store.js'
 import type { PhotoStorage } from '../photo-store.js'
 import type { DevicePairStore } from '../prisma-device-store.js'
 import type { PhotoMetadataRepository } from '../prisma-photo-repository.js'
+import { renderPhoto } from '@pvc/effects'
 
 const auth = async (r: FastifyRequest, store: DemoStore, devicePairStore?: DevicePairStore) => {
   const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
@@ -55,15 +56,21 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     return reply.code(201).send(uploadResult(p, store))
   })
   app.get('/photos/:id/image', async (r, reply) => {
-    const { account: u } = await auth(r, store, devicePairStore)
+    const { account: u, device } = await auth(r, store, devicePairStore)
     const photoId = String((r.params as any).id)
     const p = store.photos.get(photoId) ?? (photoMetadataRepository ? await photoMetadataRepository.findById(photoId) : undefined)
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND', 'photo not found'))
+    if (p.draftJobId && p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN', 'AI draft is private'))
     if (!store.isFriend(u.id, p.authorId)) return reply.code(403).send(errorBody('FORBIDDEN', 'photo is not visible to this user'))
+    const requestedSize = (r.query as { size?: string }).size
+    if (requestedSize !== undefined && requestedSize !== '320') return reply.code(400).send(errorBody('BAD_REQUEST', 'only size=320 is supported'))
     try {
       const image = await files.read(p)
-      return reply.header('cache-control', 'private, max-age=31536000, immutable').type('image/jpeg').send(image)
+      const deviceVariant = Boolean(device) || requestedSize === '320'
+      // The documented device download remains a baseline 320×240 JPEG; do not reapply a look.
+      const output = deviceVariant ? (await renderPhoto(image, { presetId: 'none', intensity: 0, aiGenerated: p.aiGenerated === true })).device : image
+      return reply.header('Vary', 'Authorization').header('cache-control', p.draftJobId || deviceVariant ? 'private, no-store' : 'private, max-age=31536000, immutable').type('image/jpeg').send(output)
     } catch {
       return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable'))
     }
@@ -75,7 +82,7 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const parsedLimit = rawLimit === undefined ? 8 : Number(rawLimit)
     if (!Number.isInteger(parsedLimit) || parsedLimit < 1) return reply.code(400).send(errorBody('BAD_REQUEST', 'limit must be a positive integer'))
     const limit = Math.min(32, parsedLimit)
-    const photos = (mine ? [...store.photos.values()].filter(p => p.authorId === u.id) : store.visiblePhotos(u.id))
+    const photos = (mine ? [...store.photos.values()].filter(p => !p.draftJobId && p.authorId === u.id) : store.visiblePhotos(u.id))
     const etag = `W/\"feed-${photos.map(p => p.id).join('-')}\"`
     if (r.headers['if-none-match'] === etag) return reply.code(304).header('ETag', etag).send()
     return reply.header('ETag', etag).send({ items: photos.slice(0, limit).map(p => item(p, u.id, store)), next_cursor: null, etag })

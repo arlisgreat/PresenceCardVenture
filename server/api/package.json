@@ -12,6 +12,7 @@
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@pvc/effects": "file:../effects",
     "@prisma/client": "^5.18.0",
     "fastify": "^4.28.1"
   },

@@ -8,3 +8,5 @@ dist/
 *.log
 server/api/uploads/
 .gstack/
+server/effects/output/
+server/effects/assets/

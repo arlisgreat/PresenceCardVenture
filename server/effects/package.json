@@ -1,0 +1,28 @@
+{
+  "name": "@pvc/effects",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20.9.0" },
+  "exports": {
+    ".": { "types": "./src/index.d.ts", "import": "./src/index.js" },
+    "./pixels": { "types": "./src/pixels.d.ts", "import": "./src/pixels.js" },
+    "./presets": "./src/presets.js",
+    "./live": { "types": "./src/live.d.ts", "import": "./src/live.js" },
+    "./mediapipe": { "types": "./src/mediapipe.d.ts", "import": "./src/mediapipe.js" },
+    "./providers": { "types": "./src/providers/index.d.ts", "import": "./src/providers/index.js" },
+    "./lut": "./src/lut.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "render": "node scripts/render.mjs",
+    "generate": "node scripts/generate.mjs",
+    "evaluate": "node scripts/evaluate.mjs",
+    "luts": "node scripts/export-luts.mjs",
+    "overlay": "node scripts/export-overlay.mjs",
+    "live-assets": "node scripts/fetch-live-assets.mjs",
+    "live-smoke": "node scripts/live-smoke.mjs"
+  },
+  "dependencies": { "sharp": "0.35.4", "@mediapipe/tasks-vision": "1.0.1" },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

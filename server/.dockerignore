@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/.env
+**/*.local
+api/uploads
+effects/output
+effects/assets
+effects/examples
+effects/test
+web

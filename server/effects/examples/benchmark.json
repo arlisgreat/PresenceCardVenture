@@ -1,0 +1,131 @@
+{
+  "kind": "local-filter-benchmark",
+  "date": "2026-08-28T04:56:09.433Z",
+  "node": "v24.19.0",
+  "platform": "darwin/arm64",
+  "cpu": "Apple M2",
+  "presetVersion": "presence-looks/1.0.0",
+  "scope": "sequential local decode + filter + Web/device encoding; synthetic fixture; no model API, network, queue or real CoreS3 capture",
+  "rows": [
+    {
+      "source": "web",
+      "preset": "none",
+      "n": 10,
+      "p50Ms": 59.4,
+      "p95Ms": 69.68,
+      "maxMs": 69.68,
+      "webBytes": 301881,
+      "deviceBytes": 17461,
+      "width": 1448,
+      "height": 1086
+    },
+    {
+      "source": "web",
+      "preset": "warm",
+      "n": 10,
+      "p50Ms": 315.39,
+      "p95Ms": 510.54,
+      "maxMs": 510.54,
+      "webBytes": 301780,
+      "deviceBytes": 17378,
+      "width": 1448,
+      "height": 1086
+    },
+    {
+      "source": "web",
+      "preset": "bw",
+      "n": 10,
+      "p50Ms": 319.51,
+      "p95Ms": 403.47,
+      "maxMs": 403.47,
+      "webBytes": 277894,
+      "deviceBytes": 16300,
+      "width": 1448,
+      "height": 1086
+    },
+    {
+      "source": "web",
+      "preset": "film",
+      "n": 10,
+      "p50Ms": 308.82,
+      "p95Ms": 318.18,
+      "maxMs": 318.18,
+      "webBytes": 301228,
+      "deviceBytes": 16913,
+      "width": 1448,
+      "height": 1086
+    },
+    {
+      "source": "web",
+      "preset": "vivid",
+      "n": 10,
+      "p50Ms": 373.87,
+      "p95Ms": 980.19,
+      "maxMs": 980.19,
+      "webBytes": 312341,
+      "deviceBytes": 17831,
+      "width": 1448,
+      "height": 1086
+    },
+    {
+      "source": "qvga-resized-fixture",
+      "preset": "none",
+      "n": 10,
+      "p50Ms": 12.35,
+      "p95Ms": 18.05,
+      "maxMs": 18.05,
+      "webBytes": 18078,
+      "deviceBytes": 14868,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "source": "qvga-resized-fixture",
+      "preset": "warm",
+      "n": 10,
+      "p50Ms": 23.68,
+      "p95Ms": 27.88,
+      "maxMs": 27.88,
+      "webBytes": 18496,
+      "deviceBytes": 15175,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "source": "qvga-resized-fixture",
+      "preset": "bw",
+      "n": 10,
+      "p50Ms": 22.83,
+      "p95Ms": 24.51,
+      "maxMs": 24.51,
+      "webBytes": 15785,
+      "deviceBytes": 14528,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "source": "qvga-resized-fixture",
+      "preset": "film",
+      "n": 10,
+      "p50Ms": 24.9,
+      "p95Ms": 27.08,
+      "maxMs": 27.08,
+      "webBytes": 18744,
+      "deviceBytes": 15476,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "source": "qvga-resized-fixture",
+      "preset": "vivid",
+      "n": 10,
+      "p50Ms": 24.73,
+      "p95Ms": 30.63,
+      "maxMs": 30.63,
+      "webBytes": 18987,
+      "deviceBytes": 15407,
+      "width": 320,
+      "height": 240
+    }
+  ]
+}

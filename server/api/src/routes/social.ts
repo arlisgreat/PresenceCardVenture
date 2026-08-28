@@ -3,6 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { DemoStore, errorBody } from '../demo-store.js'
 const auth = (r: FastifyRequest, s: DemoStore) => s.userForToken(String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, ''))
 export async function socialRoutes(app: FastifyInstance, store: DemoStore) {
+  // Private AI drafts cannot escape via messages or reaction activity before publish.
+  app.addHook('preHandler', async (request, reply) => {
+    const body = request.body as { photo_id?: string } | undefined
+    const params = request.params as { id?: string } | undefined
+    const routePath = request.routeOptions.url ?? ''
+    const id = routePath.includes('/reactions') ? params?.id : routePath === '/v1/messages' ? body?.photo_id : undefined
+    if (id && store.photos.get(id)?.draftJobId) return reply.code(403).send(errorBody('FORBIDDEN', 'AI draft is private'))
+  })
   app.get('/friends', async (r, reply) => { const u=auth(r,store); if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); return [...store.users.values()].filter(x=>x.id!==u.id&&store.isFriend(u.id,x.id)).map(x=>({username:x.username,display_name:x.displayName,since:new Date().toISOString()})) })
   app.get('/friend-requests', async (r, reply) => { const u=auth(r,store); if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); return [...store.friendRequests.values()].filter(x=>x.status==='pending'&&(x.requesterId===u.id||x.addresseeId===u.id)).map(x=>friendRequestBody(x,store,u.id)) })
   app.post('/friend-requests', async (r:any, reply) => { const u=auth(r,store), code=String(r.body?.friend_code??'').trim(); if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); const target=[...store.users.values()].find(x=>x.friendCode===code); if(!target)return reply.code(404).send(errorBody('NOT_FOUND','friend code not found')); if(target.id===u.id)return reply.code(400).send(errorBody('BAD_REQUEST','cannot add yourself')); if(store.isFriend(u.id,target.id))return reply.code(409).send(errorBody('ALREADY_EXISTS','already friends')); const existing=[...store.friendRequests.values()].find(x=>x.status==='pending'&&((x.requesterId===u.id&&x.addresseeId===target.id)||(x.requesterId===target.id&&x.addresseeId===u.id))); if(existing)return reply.code(409).send(errorBody('ALREADY_EXISTS','friend request already pending')); const item={id:`fr_${randomUUID()}`,requesterId:u.id,addresseeId:target.id,status:'pending' as const,createdAt:new Date().toISOString()}; store.friendRequests.set(item.id,item); return reply.code(201).send(friendRequestBody(item,store,u.id)) })

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 const DEMO_JPEG = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/AYf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/AYf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z', 'base64')
 
 export type User = { id: string; username: string; displayName: string; friendCode: string }
-export type Photo = { id: string; authorId: string; filterId: string; playType?: string; beauty?: number; sticker?: string; caption: string | null; circle?: string; width: number; height: number; createdAt: string; original: Buffer; processed: Buffer; idempotencyKey?: string; deviceId?: string }
+export type Photo = { id: string; authorId: string; filterId: string; playType?: string; beauty?: number; sticker?: string; caption: string | null; circle?: string; width: number; height: number; createdAt: string; original: Buffer; processed: Buffer; idempotencyKey?: string; deviceId?: string; draftJobId?: string; aiGenerated?: boolean; generation?: { provider: string; model: string; promptVersion: string; requestId?: string; referenceWarnings?: string[]; presetVersion?: string; intensity?: number; seed?: number } }
 export type Message = { id: string; from: string; to: string; text?: string; photoId?: string; createdAt: string }
 export type Job = { id: string; ownerId: string; materialIds: string[]; provider?: string; status: 'queued'|'processing'|'completed'|'failed'; resultPhotoId?: string; publishedPhotoId?: string; error?: string; createdAt: string }
 export type FriendRequest = { id: string; requesterId: string; addresseeId: string; status: 'pending' | 'accepted'; createdAt: string }
@@ -49,10 +49,10 @@ export class DemoStore {
   user(id: string) { return this.users.get(id) }
   dailyUploadCount(authorId: string, deviceId: string, now = Date.now()) {
     const day = new Date(now).toISOString().slice(0, 10)
-    return [...this.photos.values()].filter(photo => photo.authorId === authorId && photo.deviceId === deviceId && photo.createdAt.slice(0, 10) === day).length
+    return [...this.photos.values()].filter(photo => !photo.draftJobId && photo.authorId === authorId && photo.deviceId === deviceId && photo.createdAt.slice(0, 10) === day).length
   }
   isFriend(a: string, b: string) { return a === b || this.friendships.has(`${a}:${b}`) }
-  visiblePhotos(userId: string) { return [...this.photos.values()].filter(p => this.isFriend(userId, p.authorId)).sort((a,b) => b.createdAt.localeCompare(a.createdAt)) }
+  visiblePhotos(userId: string) { return [...this.photos.values()].filter(p => !p.draftJobId && this.isFriend(userId, p.authorId)).sort((a,b) => b.createdAt.localeCompare(a.createdAt)) }
   reactionsFor(photoId: string) {
     const out: Record<string, number> = { heart: 0, thumbsup: 0, wow: 0 }
     for (const key of this.reactions.keys()) if (key.startsWith(`${photoId}:`)) out[key.split(':')[1]]++

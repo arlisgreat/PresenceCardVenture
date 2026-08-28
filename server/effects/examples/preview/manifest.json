@@ -1,0 +1,127 @@
+{
+  "kind": "deterministic-filter-comparison",
+  "sourceFile": "source.png",
+  "presetVersion": "presence-looks/1.0.0",
+  "entries": [
+    {
+      "name": "原片",
+      "webFile": "none.jpg",
+      "deviceFile": "none-device.jpg",
+      "presetId": "none",
+      "presetVersion": "presence-looks/1.0.0",
+      "intensity": 1,
+      "seed": 20260827,
+      "sourceMimeType": "image/png",
+      "sourceWidth": 1448,
+      "sourceHeight": 1086,
+      "width": 1448,
+      "height": 1086,
+      "deviceWidth": 320,
+      "deviceHeight": 240,
+      "deviceQuality": 88,
+      "sha256": "1fc89139d87e4ff326029aad96fb7378f3386cf23ed49d03b07e6616a8926850",
+      "bytes": {
+        "original": 2132374,
+        "web": 301881,
+        "device": 17461
+      },
+      "warnings": []
+    },
+    {
+      "name": "日光纸片",
+      "webFile": "warm.jpg",
+      "deviceFile": "warm-device.jpg",
+      "presetId": "warm",
+      "presetVersion": "presence-looks/1.0.0",
+      "intensity": 1,
+      "seed": 20260827,
+      "sourceMimeType": "image/png",
+      "sourceWidth": 1448,
+      "sourceHeight": 1086,
+      "width": 1448,
+      "height": 1086,
+      "deviceWidth": 320,
+      "deviceHeight": 240,
+      "deviceQuality": 88,
+      "sha256": "1fc89139d87e4ff326029aad96fb7378f3386cf23ed49d03b07e6616a8926850",
+      "bytes": {
+        "original": 2132374,
+        "web": 301830,
+        "device": 17351
+      },
+      "warnings": []
+    },
+    {
+      "name": "银盐黑白",
+      "webFile": "bw.jpg",
+      "deviceFile": "bw-device.jpg",
+      "presetId": "bw",
+      "presetVersion": "presence-looks/1.0.0",
+      "intensity": 1,
+      "seed": 20260827,
+      "sourceMimeType": "image/png",
+      "sourceWidth": 1448,
+      "sourceHeight": 1086,
+      "width": 1448,
+      "height": 1086,
+      "deviceWidth": 320,
+      "deviceHeight": 240,
+      "deviceQuality": 88,
+      "sha256": "1fc89139d87e4ff326029aad96fb7378f3386cf23ed49d03b07e6616a8926850",
+      "bytes": {
+        "original": 2132374,
+        "web": 277858,
+        "device": 16304
+      },
+      "warnings": []
+    },
+    {
+      "name": "即时相纸",
+      "webFile": "film.jpg",
+      "deviceFile": "film-device.jpg",
+      "presetId": "film",
+      "presetVersion": "presence-looks/1.0.0",
+      "intensity": 1,
+      "seed": 20260827,
+      "sourceMimeType": "image/png",
+      "sourceWidth": 1448,
+      "sourceHeight": 1086,
+      "width": 1448,
+      "height": 1086,
+      "deviceWidth": 320,
+      "deviceHeight": 240,
+      "deviceQuality": 88,
+      "sha256": "1fc89139d87e4ff326029aad96fb7378f3386cf23ed49d03b07e6616a8926850",
+      "bytes": {
+        "original": 2132374,
+        "web": 301365,
+        "device": 16906
+      },
+      "warnings": []
+    },
+    {
+      "name": "傍晚数码",
+      "webFile": "vivid.jpg",
+      "deviceFile": "vivid-device.jpg",
+      "presetId": "vivid",
+      "presetVersion": "presence-looks/1.0.0",
+      "intensity": 1,
+      "seed": 20260827,
+      "sourceMimeType": "image/png",
+      "sourceWidth": 1448,
+      "sourceHeight": 1086,
+      "width": 1448,
+      "height": 1086,
+      "deviceWidth": 320,
+      "deviceHeight": 240,
+      "deviceQuality": 88,
+      "sha256": "1fc89139d87e4ff326029aad96fb7378f3386cf23ed49d03b07e6616a8926850",
+      "bytes": {
+        "original": 2132374,
+        "web": 312588,
+        "device": 17805
+      },
+      "warnings": []
+    }
+  ]
+}

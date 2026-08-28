@@ -62,9 +62,9 @@ test('runs authorized AI jobs and rejects unauthorized materials', async () => {
   const noConsent = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: [ids[0], friendPhotoId] } })
   assert.equal(noConsent.statusCode, 403)
   const consented = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: [ids[0], friendPhotoId], consent: true } })
-  assert.equal(consented.statusCode, 202)
+  assert.equal(consented.statusCode, 403)
   const forbidden = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: ['missing'] } })
-  assert.equal(forbidden.statusCode, 403)
+  assert.equal(forbidden.statusCode, 400)
   await app.close()
 })
 
@@ -81,7 +81,7 @@ test('uses an injected AI provider and records provider failures', async () => {
   await new Promise((resolve) => setTimeout(resolve, 20))
   const status = await app.inject({ method: 'GET', url: `/v1/ai/jobs/${created.json().job_id}`, headers: auth })
   assert.equal(status.json().status, 'failed')
-  assert.equal(status.json().message, 'provider offline')
+  assert.equal(status.json().message, 'Image generation failed. Please try again later.')
   await app.close()
 })
 
