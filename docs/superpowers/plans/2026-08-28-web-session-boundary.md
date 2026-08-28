@@ -86,7 +86,7 @@ Expected: zero test failures, both builds exit 0, and no whitespace errors.
 
 Open `http://localhost:5173/`, confirm the feed loads, protected images render, navigation works at desktop and mobile widths, and the console has no application errors.
 
-- [ ] **Step 6: Commit and synchronize**
+- [x] **Step 6: Commit and synchronize**
 
 Commit message: `refactor: centralize web user session`.
 
