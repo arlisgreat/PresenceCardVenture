@@ -53,5 +53,8 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 # TLS 握手 ~40KB 堆, mbedTLS 缓冲放 PSRAM 之外的默认堆即可 (CoreS3 SRAM 足够)
 
+# --- 堆完整性 (联调/仿真期开启, 每块前后毒化字节, malloc/free 校验; 发布可关) ---
+CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+
 # --- 日志 ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

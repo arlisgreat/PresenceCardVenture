@@ -45,7 +45,9 @@ esp_err_t app_camera_init(void)
         .ledc_timer    = LEDC_TIMER_0,
         .ledc_channel  = LEDC_CHANNEL_0,
         .pixel_format  = PIXFORMAT_RGB565,
-        .frame_size    = FRAMESIZE_VGA,    /* 640x480 原生最大, 拍照画质; 预览由 hw2d_scale 降采样 */
+        /* 系统统一 320x240 (产品只要求 QVGA JPEG): 采集/预览/拍照零缩放,
+         * DMA 与 PSRAM 带宽较 VGA 降至 1/4 */
+        .frame_size    = FRAMESIZE_QVGA,
         .jpeg_quality  = 0,
         .fb_count      = 2,                /* 双缓冲, PSRAM */
         .fb_location   = CAMERA_FB_IN_PSRAM,
@@ -62,7 +64,7 @@ esp_err_t app_camera_init(void)
             /* 画质默认值微调: 亮度 +1, 对照度 +1 (GC0308 默认偏暗) */
             s->set_brightness(s, 1);
             s->set_contrast(s, 1);
-            ESP_LOGI(TAG, "GC0308 ready: VGA RGB565 (frame %u)", s->status.framesize);
+            ESP_LOGI(TAG, "GC0308 ready: QVGA RGB565 (frame %u)", s->status.framesize);
         }
     } else {
         ESP_LOGE(TAG, "esp_camera_init failed: %s (0x%x), 请检查摄像头排线",

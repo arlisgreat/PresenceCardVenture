@@ -47,6 +47,15 @@ static void net_status_cb(pvc_net_state_t st, const char *detail)
     ui_net_set_status(txt[st]);
 }
 
+#ifdef PVC_ALGO_TEST
+/* QEMU 仿真算法自测: 跳过 BSP/相机/联网 (外设不存在) */
+void pvc_algo_test_run(void);
+void app_main(void)
+{
+    pvc_algo_test_run();
+    vTaskDelay(portMAX_DELAY);
+}
+#else
 void app_main(void)
 {
     /* 定时器唤醒 = 静默轮询 (§6): 不亮屏不开相机, 同步完成即回睡 */
@@ -123,3 +132,4 @@ void app_main(void)
     /* 6. 省电管理 (§6): 60s 无操作入睡, 5 分钟定时静默轮询, 触摸唤醒 */
     pvc_power_init(quiet);
 }
+#endif /* PVC_ALGO_TEST */

@@ -13,15 +13,15 @@
 
 ## 预览管线(core 0,LVGL 任务,40ms 定时器 = 25fps 上限)
 
+> 系统统一 QVGA 320×240(产品只要求 QVGA JPEG):采集=预览=拍照,全链路零缩放。
+
 ```
-GC0308 ──DVP──> I2S 并行 DMA ──> PSRAM 双缓冲 fb[0]/fb[1]     (自由运行, 零 CPU)
+GC0308 ──DVP──> I2S 并行 DMA ──> PSRAM 双缓冲 fb[0]/fb[1]     (QVGA, 自由运行)
                                       │
 每 40ms preview_timer_cb (LVGL 任务, 持显示锁):
   1. app_camera_grab()        取最新帧(GRAB_LATEST), 归还上一帧;
                               相机未初始化(静默唤醒)时快速返回 NULL 跳过
-  2. hw2d_scale_stat          VGA 640x480 → QVGA 320x240 (Q16 双线性,
-                              直读 DMA 缓冲零拷贝) → s_preview_qvga
-  3. hw2d_filter_lut_stat     LUT 滤镜 → s_canvas_buf
+  3. hw2d_filter_lut_stat     LUT 滤镜直读 DMA 帧 → s_canvas_buf (零缩放)
                               (参数变化才重建表; 黑白走灰度专用路径)
   4. blend_circle x3 (可选)   贴纸: hw2d_fill 白源 + SRC_OVER 混合
   5. lv_obj_invalidate        LVGL 渲染 → esp_lvgl_port SPI DMA 异步刷屏

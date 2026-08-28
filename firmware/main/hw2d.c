@@ -149,7 +149,17 @@ void hw2d_apply_filter_lut(uint16_t *dst, const uint16_t *src, uint32_t npix,
         return;
     }
 
-    /* 逐 4 像素批次 (uint64 读取, 缓存友好) */
+    /* 逐 4 像素批次 (uint64 读取, 缓存友好)。
+     * src/dst 须 8 字节对齐才走批处理: 相机 DMA 缓冲对齐无保证,
+     * Xtensa 非对齐 64bit 访存会触发 LoadStoreAlignment 异常 (UBSAN 实证) */
+    if ((((uintptr_t)src | (uintptr_t)dst) & 7u) != 0) {
+        for (i = 0; i < npix; i++) {
+            uint16_t p = src[i];
+            dst[i] = PACK_RGB565(s_lut_r[UNPACK_R(p)], s_lut_g[UNPACK_G(p)],
+                                 s_lut_b[UNPACK_B(p)]);
+        }
+        return;
+    }
     uint32_t nq = npix / 4;
     const uint64_t *sq = (const uint64_t *)src;
     uint64_t *dq = (uint64_t *)dst;
@@ -391,7 +401,9 @@ void hw2d_alpha_blend(uint16_t *dst, const uint16_t *src, uint32_t npix,
 /* ================================================================== */
 /* 16bit 车道字节交换 (LE<->BE)                                        */
 /* ================================================================== */
-#if defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
+/* PVC_NO_PIE: QEMU 仿真等场景禁用 PIE 汇编 (指令仿真支持不确定), 走 C 路径 */
+#if defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3) && \
+    !defined(PVC_NO_PIE)
 #define HW2D_HAVE_PIE 1
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"

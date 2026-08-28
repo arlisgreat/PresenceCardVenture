@@ -144,7 +144,8 @@ void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
 /* ------------------------------------------------------------------ */
 
 /*
- * dst[i] = byteswap16(src[i])。src/dst 必须分离。
+ * dst[i] = byteswap16(src[i])。允许 dst==src 原地转换
+ * (各路径均为读后写同址); 部分重叠不允许。
  * ESP32-S3 上若 PIE 128-bit 路径可用 (开机自测通过) 且两缓冲 16 字节对齐,
  * 走 PIE 汇编 (8 像素/拍); 否则 64bit 掩码路径 (4 像素/次)。
  */

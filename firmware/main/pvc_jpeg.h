@@ -16,11 +16,16 @@ extern "C" {
 #endif
 
 /*
- * RGB565(LE) -> JPEG。out 由调用方提供 (建议容量 >= w*h/2, VGA q90 实测 ~100KB)。
+ * RGB565(LE) -> JPEG。out 由调用方提供 (建议容量 >= w*h/2)。
  * 返回实际字节数; 失败返回 0。quality 1-100。
+ * esp_new_jpeg 编码器不收 RGB565 (QEMU 实测): 内部展开 RGB888 后编码,
+ * 转换缓冲常驻复用。非线程安全 —— 仅限单一调用方串行使用 (photo_worker)。
  */
 size_t pvc_jpeg_encode(const uint16_t *rgb565, uint32_t w, uint32_t h,
                        uint8_t quality, uint8_t *out, size_t out_cap);
+
+/* 快速解析 JPEG SOF 尺寸 (防异常尺寸图解码溢出); 解析失败返回 false */
+bool pvc_jpeg_dims(const uint8_t *jpg, size_t len, uint32_t *w, uint32_t *h);
 
 #ifdef __cplusplus
 }
