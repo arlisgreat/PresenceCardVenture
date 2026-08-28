@@ -63,6 +63,11 @@ function clamp(value: number) {
   return Math.max(0, Math.min(255, Math.round(value)))
 }
 
+function offlineFallback<T>(error: unknown, fallback: () => T): T {
+  if (error instanceof TypeError) return fallback()
+  throw error
+}
+
 async function jpegPayload(file: File, options: { filterId: string; beauty: number; sticker: string }): Promise<ProcessedImage> {
   if (!['image/jpeg', 'image/png'].includes(file.type)) throw new Error('仅支持 JPG 或 PNG 图片')
   if (typeof createImageBitmap !== 'function') return { blob: file, width: 0, height: 0 }
@@ -153,8 +158,8 @@ export async function getFeed(): Promise<FeedItem[]> {
   try {
     const data = await request<{ items?: FeedItem[] }>('/feed?limit=20')
     return (data.items ?? []).map(item => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoAssetByPhotoId[item.photo_id] ?? item.image_url } : { ...item, id: item.photo_id ?? item.id })
-  } catch {
-    return demoFeed
+  } catch (error) {
+    return offlineFallback(error, () => demoFeed)
   }
 }
 
@@ -214,20 +219,20 @@ export async function deletePhoto(id: string): Promise<void> {
 }
 
 export async function getMessages(friend = 'luna'): Promise<Message[]> {
-  try { return await request<Message[]>(`/messages?friend=${encodeURIComponent(friend)}`) } catch {
-    return [
+  try { return await request<Message[]>(`/messages?friend=${encodeURIComponent(friend)}`) } catch (error) {
+    return offlineFallback(error, () => [
       { id: 'm1', sender: 'luna', senderName: '露娜', body: '今天的光线好漂亮，像一张旧相纸。', createdAt: new Date(Date.now() - 1000 * 60 * 42).toISOString() },
       { id: 'm2', sender: 'me', senderName: '我', body: '我也拍下来了，晚点放进圈子。', createdAt: new Date(Date.now() - 1000 * 60 * 37).toISOString() },
-    ]
+    ])
   }
 }
 
 export async function getFriends(): Promise<Friend[]> {
-  try { return await request<Friend[]>('/friends') } catch { return [{ username: 'luna', display_name: '露娜' }, { username: 'momo', display_name: '墨墨' }] }
+  try { return await request<Friend[]>('/friends') } catch (error) { return offlineFallback(error, () => [{ username: 'luna', display_name: '露娜' }, { username: 'momo', display_name: '墨墨' }]) }
 }
 
 export async function getFriendRequests(): Promise<FriendRequest[]> {
-  try { return await request<FriendRequest[]>('/friend-requests') } catch { return [] }
+  try { return await request<FriendRequest[]>('/friend-requests') } catch (error) { return offlineFallback(error, () => []) }
 }
 
 export async function sendFriendRequest(friendCode: string): Promise<FriendRequest> {
@@ -280,7 +285,7 @@ export async function deleteAiJob(id: string): Promise<void> {
 export type DeviceState = { unseen_count: number; pending_friend_requests: number; server_time: string; pending_config?: DeviceConfig | null; active_config?: DeviceConfig | null }
 
 export async function getDeviceState(): Promise<DeviceState> {
-  try { return await request<DeviceState>('/device/state') } catch { return { unseen_count: 3, pending_friend_requests: 1, server_time: new Date().toISOString(), pending_config: null, active_config: null } }
+  try { return await request<DeviceState>('/device/state') } catch (error) { return offlineFallback(error, () => ({ unseen_count: 3, pending_friend_requests: 1, server_time: new Date().toISOString(), pending_config: null, active_config: null })) }
 }
 
 export async function getDeviceStateForToken(deviceToken: string): Promise<DeviceState> {

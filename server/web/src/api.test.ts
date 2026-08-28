@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getFeed, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
 import { clearUserToken, setUserToken } from './user-session.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
@@ -77,6 +77,34 @@ test('feed keeps seeded asset identity when a new photo changes server ordering'
     const feed = await getFeed()
     assert.equal(feed[1].image_url, '/assets/feed-window.jpg')
     assert.equal(feed[2].image_url, '/assets/feed-portrait.jpg')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('read helpers propagate HTTP failures instead of replacing them with demo data', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: { code: 'TOKEN_INVALID' } }), { status: 401 })) as typeof fetch
+  try {
+    await assert.rejects(() => getFeed(), /TOKEN_INVALID|Request failed: 401/)
+    await assert.rejects(() => getMessages(), /TOKEN_INVALID|Request failed: 401/)
+    await assert.rejects(() => getFriends(), /TOKEN_INVALID|Request failed: 401/)
+    await assert.rejects(() => getFriendRequests(), /TOKEN_INVALID|Request failed: 401/)
+    await assert.rejects(() => getDeviceState(), /TOKEN_INVALID|Request failed: 401/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('read helpers retain offline demo data only when the API cannot be reached', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => { throw new TypeError('fetch failed') }) as typeof fetch
+  try {
+    assert.ok((await getFeed()).length > 0)
+    assert.ok((await getMessages()).length > 0)
+    assert.ok((await getFriends()).length > 0)
+    assert.deepEqual(await getFriendRequests(), [])
+    assert.equal((await getDeviceState()).pending_friend_requests, 1)
   } finally {
     globalThis.fetch = originalFetch
   }

@@ -84,10 +84,13 @@ function App() {
   const [toast, setToast] = useState('')
   const [heartBurst, setHeartBurst] = useState<string | null>(null)
   const [pendingReactions, setPendingReactions] = useState<Set<string>>(new Set())
-  const [deviceState, setDeviceState] = useState({ unseen_count: 3, pending_friend_requests: 1, server_time: '' })
+  const [deviceState, setDeviceState] = useState({ unseen_count: 0, pending_friend_requests: 0, server_time: '' })
   const [selectedConfig, setSelectedConfig] = useState<PlaySelection>({ filterId: 'none', playType: 'beauty', beauty: 42, sticker: 'none', name: '原色' })
 
-  useEffect(() => { void getFeed().then(setFeed); void getDeviceState().then(setDeviceState) }, [])
+  useEffect(() => {
+    void getFeed().then(setFeed).catch(() => setToast('圈子暂时无法读取，请检查连接或登录状态'))
+    void getDeviceState().then(setDeviceState).catch(() => setToast('设备状态暂时无法读取'))
+  }, [])
   useEffect(() => { if (inviteCodeFromUrl) setView('messages') }, [inviteCodeFromUrl])
   useEffect(() => { if (!toast) return; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout) }, [toast])
 
@@ -239,10 +242,10 @@ function CreateView({ onPublished, onCancel, onToast }: { onPublished: (item: Fe
 
 function MessagesView({ onToast, initialCode = '' }: { onToast: (message: string) => void; initialCode?: string }) {
   const [friend, setFriend] = useState('luna'); const [messages, setMessages] = useState<Message[]>([]); const [draft, setDraft] = useState(''); const [uploading, setUploading] = useState(false); const imageInputRef = useRef<HTMLInputElement>(null)
-  const [friends, setFriends] = useState<Friend[]>([{ username: 'luna', display_name: '露娜' }, { username: 'momo', display_name: '墨墨' }]); const [requests, setRequests] = useState<FriendRequest[]>([]); const [friendCode, setFriendCode] = useState(initialCode); const [showAddFriend, setShowAddFriend] = useState(Boolean(initialCode)); const [friendBusy, setFriendBusy] = useState(false); const [inviteCode, setInviteCode] = useState('100001'); const [inviteUrl, setInviteUrl] = useState('')
-  useEffect(() => { void getMessages(friend).then(setMessages) }, [friend])
-  useEffect(() => { void Promise.all([getFriends(), getFriendRequests()]).then(([items, incoming]) => { if (items.length) { setFriends(items); setFriend(current => items.some(item => item.username === current) ? current : items[0].username) }; setRequests(incoming) }) }, [])
-  useEffect(() => { void getCurrentUser().then(user => { setInviteCode(user.friend_code); setInviteUrl(buildInviteUrl(user.friend_code, window.location.origin)) }).catch(() => { setInviteUrl(buildInviteUrl(inviteCode, window.location.origin)) }) }, [])
+  const [friends, setFriends] = useState<Friend[]>([]); const [requests, setRequests] = useState<FriendRequest[]>([]); const [friendCode, setFriendCode] = useState(initialCode); const [showAddFriend, setShowAddFriend] = useState(Boolean(initialCode)); const [friendBusy, setFriendBusy] = useState(false); const [inviteCode, setInviteCode] = useState(''); const [inviteUrl, setInviteUrl] = useState('')
+  useEffect(() => { void getMessages(friend).then(setMessages).catch(() => onToast('消息暂时无法读取，请检查登录状态')) }, [friend, onToast])
+  useEffect(() => { void Promise.all([getFriends(), getFriendRequests()]).then(([items, incoming]) => { if (items.length) { setFriends(items); setFriend(current => items.some(item => item.username === current) ? current : items[0].username) }; setRequests(incoming) }).catch(() => onToast('好友列表暂时无法读取')) }, [onToast])
+  useEffect(() => { void getCurrentUser().then(user => { setInviteCode(user.friend_code); setInviteUrl(buildInviteUrl(user.friend_code, window.location.origin)) }).catch(() => onToast('邀请信息暂时无法读取')) }, [onToast])
   async function send() {
     const body = draft.trim()
     if (!body) return
