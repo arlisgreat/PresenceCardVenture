@@ -84,3 +84,40 @@ test('uses an injected AI provider and records provider failures', async () => {
   assert.equal(status.json().message, 'provider offline')
   await app.close()
 })
+
+test('publishes a completed AI result to the feed idempotently', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-ai-publish' })
+  const auth = { authorization: 'Bearer demo-token' }
+  const materials = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: auth })
+  const ids = materials.json().items.slice(0, 2).map((item: any) => item.photo_id)
+  const created = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: ids } })
+  await new Promise(resolve => setTimeout(resolve, 20))
+
+  const published = await app.inject({ method: 'POST', url: `/v1/ai/jobs/${created.json().job_id}/publish`, headers: { ...auth, 'content-type': 'application/json' }, payload: { circle: '傍晚的天空', caption: '把两份记忆放在一起。' } })
+  assert.equal(published.statusCode, 201)
+  assert.equal(published.json().caption, '把两份记忆放在一起。')
+  assert.equal(published.json().circle, '傍晚的天空')
+  assert.equal(published.json().source_job_id, created.json().job_id)
+
+  const retry = await app.inject({ method: 'POST', url: `/v1/ai/jobs/${created.json().job_id}/publish`, headers: { ...auth, 'content-type': 'application/json' }, payload: { circle: '宿舍窗台', caption: '不应覆盖第一次发布' } })
+  assert.equal(retry.statusCode, 200)
+  assert.equal(retry.json().photo_id, published.json().photo_id)
+  assert.equal(retry.json().caption, '把两份记忆放在一起。')
+
+  const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: auth })
+  assert.equal(feed.json().items[0].photo_id, published.json().photo_id)
+  await app.close()
+})
+
+test('does not publish an unfinished or another user AI job', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-ai-publish-auth' })
+  const auth = { authorization: 'Bearer demo-token' }
+  const materials = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: auth })
+  const ids = materials.json().items.slice(0, 2).map((item: any) => item.photo_id)
+  const created = await app.inject({ method: 'POST', url: '/v1/ai/jobs', headers: { ...auth, 'content-type': 'application/json' }, payload: { material_ids: ids } })
+  const tooSoon = await app.inject({ method: 'POST', url: `/v1/ai/jobs/${created.json().job_id}/publish`, headers: { ...auth, 'content-type': 'application/json' }, payload: {} })
+  assert.equal(tooSoon.statusCode, 409)
+  const forbidden = await app.inject({ method: 'POST', url: `/v1/ai/jobs/${created.json().job_id}/publish`, headers: { authorization: 'Bearer demo-user-2', 'content-type': 'application/json' }, payload: {} })
+  assert.equal(forbidden.statusCode, 403)
+  await app.close()
+})

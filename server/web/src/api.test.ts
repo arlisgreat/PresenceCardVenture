@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceStateForToken, getPairStatus, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceStateForToken, getPairStatus, publishAiJob, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []
@@ -80,6 +80,22 @@ test('AI helpers propagate provider errors instead of returning fake success', a
   try {
     await assert.rejects(() => createAiJob(['p_1', 'p_2']), /AI_UNAVAILABLE|Request failed: 503/)
     await assert.rejects(() => getAiJob('job_1'), /AI_UNAVAILABLE|Request failed: 503/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('AI publish helper sends the owner caption and circle', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; method?: string; authorization?: string; body?: string } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), method: init?.method, authorization: new Headers(init?.headers).get('Authorization') ?? undefined, body: String(init?.body ?? '') }
+    return new Response(JSON.stringify({ photo_id: 'p_ai_published', url: '/v1/photos/p_ai_published/image', created_at: '2026-08-28T00:00:00.000Z', caption: '两份在场', circle: '小圈', source_job_id: 'job_1' }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const result = await publishAiJob('job_1', { caption: '两份在场', circle: '小圈' })
+    assert.equal(result.photo_id, 'p_ai_published')
+    assert.deepEqual(request, { url: '/v1/ai/jobs/job_1/publish', method: 'POST', authorization: 'Bearer demo-token', body: JSON.stringify({ caption: '两份在场', circle: '小圈' }) })
   } finally {
     globalThis.fetch = originalFetch
   }

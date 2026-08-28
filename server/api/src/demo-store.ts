@@ -6,7 +6,7 @@ const DEMO_JPEG = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP///////////////
 export type User = { id: string; username: string; displayName: string; friendCode: string }
 export type Photo = { id: string; authorId: string; filterId: string; playType?: string; beauty?: number; sticker?: string; caption: string | null; circle?: string; width: number; height: number; createdAt: string; original: Buffer; processed: Buffer; idempotencyKey?: string; deviceId?: string }
 export type Message = { id: string; from: string; to: string; text?: string; photoId?: string; createdAt: string }
-export type Job = { id: string; ownerId: string; materialIds: string[]; provider?: string; status: 'queued'|'processing'|'completed'|'failed'; resultPhotoId?: string; error?: string; createdAt: string }
+export type Job = { id: string; ownerId: string; materialIds: string[]; provider?: string; status: 'queued'|'processing'|'completed'|'failed'; resultPhotoId?: string; publishedPhotoId?: string; error?: string; createdAt: string }
 export type FriendRequest = { id: string; requesterId: string; addresseeId: string; status: 'pending' | 'accepted'; createdAt: string }
 export type DeviceConfig = { id: string; filter_id: string; play_type: string; beauty: number; sticker: string; updated_at: string }
 

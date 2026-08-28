@@ -36,6 +36,7 @@ export type AiJob = {
   status: 'queued' | 'processing' | 'completed' | 'failed'
   resultUrl?: string
   message?: string
+  publishedPhotoId?: string
 }
 
 export type PairStatus = {
@@ -240,11 +241,17 @@ export async function createAiJob(photoIds: string[]): Promise<AiJob> {
 export async function getAiJob(id: string): Promise<AiJob> {
   try {
     const response = await request<AiJob & { result_photo_id?: string; error?: string }>(`/ai/jobs/${id}`)
-    return { id, status: response.status, resultUrl: response.resultUrl ?? (response as AiJob & { result_url?: string }).result_url ?? (response.status === 'completed' ? demoFeed[2].image_url : undefined), message: response.message ?? response.error }
+    return { id, status: response.status, resultUrl: response.resultUrl ?? (response as AiJob & { result_url?: string }).result_url ?? (response.status === 'completed' ? demoFeed[2].image_url : undefined), message: response.message ?? response.error, publishedPhotoId: response.publishedPhotoId }
   } catch (error) {
     if (!(error instanceof TypeError)) throw error
     return { id, status: 'completed', resultUrl: demoFeed[2].image_url, message: '合照已经生成。' }
   }
+}
+
+export type PublishedAiResult = { photo_id: string; url: string; created_at: string; caption: string; circle: string; source_job_id: string }
+
+export async function publishAiJob(id: string, options: { caption?: string; circle?: string } = {}): Promise<PublishedAiResult> {
+  return request<PublishedAiResult>(`/ai/jobs/${id}/publish`, { method: 'POST', body: JSON.stringify(options) })
 }
 
 export async function deleteAiJob(id: string): Promise<void> {
