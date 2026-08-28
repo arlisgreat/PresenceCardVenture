@@ -72,6 +72,7 @@
 - 设备配置状态展示：Web 将待回执配置与已生效配置分开维护；回执后配置转为 active 并持续显示在设备屏幕和信息栏，后续再次下发只替换 pending，不会把已生效玩法错误重置为“原色”。
 - 设备配置恢复：`GET /device/state` 同时返回 `pending_config` 与最近一次成功回执的 `active_config`；Web 重新绑定设备时恢复这两个状态，刷新或重连后仍显示真实生效玩法。
 - 配对码续期：重复领取配对码只更新短期配对凭证，不覆盖设备绑定、心跳和已生效玩法状态，避免重连流程造成配置丢失。
+- Web 设备会话：绑定成功后 Demo 在浏览器本地保存设备 token；设备页重新打开时先向服务端校验 token 并恢复 `active_config`/`pending_config`，失效 token 会自动清理。
 - 设备状态统计：设备 token 读取 `/device/state` 时，未看动态和待处理好友数会按绑定账号的授权可见范围计算，不泄露全局计数。
 - 设备拍照模拟：Device Lab 的“拍照并上传”会用内置 JPEG 帧调用 `/photos`，带上设备 token、`X-Device-ID` 和幂等键；返回的照片会立即显示在设备屏幕预览中。真实相机帧仍由 ESP32 固件替换。
 - Feed 分页边界：`GET /feed` 和 `GET /photos/mine` 对 `limit` 强制使用正整数，超过 32 时按 32 返回，非法值返回 `400 BAD_REQUEST`，避免设备和 Web 获得不确定页大小。
