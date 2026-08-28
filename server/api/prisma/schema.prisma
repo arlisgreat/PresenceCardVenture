@@ -55,6 +55,7 @@ model Device {
   pairCode      String?
   pairExpiresAt DateTime?
   tokenHash     String? // device_token 的 SHA-256，明文不落库
+  tokenCiphertext String? // 用 DEVICE_TOKEN_ENCRYPTION_KEY 加密，供配对轮询一次性取回
   fwVersion     String?
   lastSeenAt    DateTime?
   createdAt     DateTime  @default(now())

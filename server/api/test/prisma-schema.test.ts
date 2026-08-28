@@ -30,6 +30,10 @@ test('Prisma schema covers web session and social/AI persistence contracts', asy
 
   const photo = modelBlock(schema, 'Photo')
   for (const field of ['playType', 'beauty', 'sticker', 'circle', 'originalOssKey']) assert.match(photo, new RegExp(`^\\s*${field}\\s+`, 'm'))
+
+  const device = modelBlock(schema, 'Device')
+  assert.match(device, /tokenHash\s+String\?/)
+  assert.match(device, /tokenCiphertext\s+String\?/)
 })
 
 test('Prisma deployment assets include an initial migration and provider lock', async () => {

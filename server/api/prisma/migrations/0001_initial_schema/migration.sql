@@ -42,6 +42,7 @@ CREATE TABLE "devices" (
     "pairCode" TEXT,
     "pairExpiresAt" TIMESTAMP(3),
     "tokenHash" TEXT,
+    "tokenCiphertext" TEXT,
     "fwVersion" TEXT,
     "lastSeenAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -214,4 +215,3 @@ ALTER TABLE "offline_tickets" ADD CONSTRAINT "offline_tickets_ownerId_fkey" FORE
 
 -- AddForeignKey
 ALTER TABLE "offline_tickets" ADD CONSTRAINT "offline_tickets_claimedBy_fkey" FOREIGN KEY ("claimedBy") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
