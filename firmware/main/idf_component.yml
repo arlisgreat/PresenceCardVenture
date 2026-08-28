@@ -4,4 +4,5 @@
 dependencies:
   m5stack_core_s3: "^3.0.0"          # BSP: LCD(ILI9342C)+触摸+LVGL 9.5 (esp_lvgl_port)
   espressif/esp32-camera: "^2.0.0"   # GC0308 DVP 驱动, PSRAM 双缓冲 RGB565
+  espressif/esp_new_jpeg: "^0.6"     # 乐鑫优化 JPEG 编码器 (比 jpge 快 2-4x, 支持 RGB565 LE 直入)
   idf: ">=5.3"

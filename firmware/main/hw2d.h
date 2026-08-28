@@ -130,6 +130,15 @@ void hw2d_scale(const uint16_t *src, uint32_t w_src, uint32_t h_src,
 void hw2d_scale_be(const uint16_t *src, uint32_t w_src, uint32_t h_src,
                    uint16_t *dst, uint32_t w_dst, uint32_t h_dst);
 
+/*
+ * 预览融合算子: 2:1 盒均值降采样 + LUT 滤镜单遍 (src 恰为 2dw x 2dh)。
+ * 共享 LUT 静态表, 仅限单任务 (预览/LVGL) 调用。
+ */
+void hw2d_scale2x_lut(uint16_t *dst, const uint16_t *src,
+                      uint32_t dw, uint32_t dh, const hw2d_filter_t *f);
+void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
+                           uint32_t dw, uint32_t dh, const hw2d_filter_t *f);
+
 /* ------------------------------------------------------------------ */
 /* 16bit 车道字节交换 (RGB565 小端 <-> 大端)                            */
 /* ------------------------------------------------------------------ */

@@ -142,6 +142,54 @@ static void test_filter_lut(void)
     }
 }
 
+/*
+ * 融合算子 scale2x_lut: 与 "2x2 盒均值(8bit域) -> pack -> LUT" 参考路径比对。
+ * pack/unpack 往返有 <=1 LSB 量化差, 对比度放大后按每 8bit 通道 ±3 容差。
+ */
+static void test_scale2x_lut(void)
+{
+    enum { DW = 32, DH = 24, SW = DW * 2, SH = DH * 2 };
+    static uint16_t src[SW * SH], fused[DW * DH], avg[DW * DH], ref[DW * DH];
+    fill_rand(src, SW * SH, 77);
+
+    const hw2d_filter_t *f = hw2d_filter_get(HW2D_FILTER_WARM);
+    hw2d_scale2x_lut(fused, src, DW, DH, f);
+    /* 确定性 */
+    hw2d_scale2x_lut(ref, src, DW, DH, f);
+    CHECK(memcmp(fused, ref, sizeof(ref)) == 0, "not deterministic");
+
+    /* 参考: 盒均值(带 round-trip 量化) -> LUT */
+    for (int y = 0; y < DH; y++) {
+        for (int x = 0; x < DW; x++) {
+            uint16_t p00 = src[(y*2)*SW + x*2],   p01 = src[(y*2)*SW + x*2+1];
+            uint16_t p10 = src[(y*2+1)*SW + x*2], p11 = src[(y*2+1)*SW + x*2+1];
+            #define UR(p) ((uint8_t)((((p)>>11)&31)<<3 | (((p)>>13)&7)))
+            #define UG(p) ((uint8_t)((((p)>>5)&63)<<2 | (((p)>>9)&3)))
+            #define UB(p) ((uint8_t)((((p)&31)<<3) | (((p)>>2)&7)))
+            int r = (UR(p00)+UR(p01)+UR(p10)+UR(p11)) >> 2;
+            int g = (UG(p00)+UG(p01)+UG(p10)+UG(p11)) >> 2;
+            int b = (UB(p00)+UB(p01)+UB(p10)+UB(p11)) >> 2;
+            avg[y*DW+x] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+        }
+    }
+    hw2d_apply_filter_lut(ref, avg, DW * DH, f);
+    for (int i = 0; i < DW * DH; i++) {
+        int dr = abs((int)(((fused[i]>>11)&31)<<3) - (int)(((ref[i]>>11)&31)<<3));
+        int dg = abs((int)(((fused[i]>>5)&63)<<2) - (int)(((ref[i]>>5)&63)<<2));
+        int db = abs((int)((fused[i]&31)<<3) - (int)((ref[i]&31)<<3));
+        if (dr > 12 || dg > 8 || db > 12) {   /* ±3 8bit 域 ≈ 通道值差 <= 上限 */
+            CHECK(0, "fused deviates @%d (dr=%d dg=%d db=%d)", i, dr, dg, db);
+            break;
+        }
+    }
+    /* 黑白滤镜灰度路径 */
+    hw2d_scale2x_lut(fused, src, DW, DH, hw2d_filter_get(HW2D_FILTER_BW));
+    for (int i = 0; i < DW * DH; i++) {
+        int r = (fused[i]>>11)&31, gch = (fused[i]>>6)&31, bl = fused[i]&31;
+        if (abs(r-gch) > 1 || abs(gch-bl) > 1) { CHECK(0, "bw fused not gray @%d", i); break; }
+    }
+}
+
 int main(void)
 {
     hw2d_init();
@@ -150,6 +198,7 @@ int main(void)
     test_blur();
     test_fill();
     test_filter_lut();
+    test_scale2x_lut();
     if (g_fail) {
         printf("hw2d host tests: %d FAILURE(S)\n", g_fail);
         return 1;

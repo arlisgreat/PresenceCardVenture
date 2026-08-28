@@ -113,25 +113,28 @@ static inline bool filter_is_gray(const hw2d_filter_t *f)
     return f->sat == 0 && f->gain_r == f->gain_g && f->gain_g == f->gain_b;
 }
 
+/* 按内容判断并重建 LUT (UI 复用同一结构体地址改参数, 指针比较会漏重建) */
+static void ensure_lut(const hw2d_filter_t *f)
+{
+    if (s_lut_valid && memcmp(&s_lut_cached, f, sizeof(*f)) == 0) return;
+    s_lut_is_gray = filter_is_gray(f);
+    if (s_lut_is_gray) {
+        build_gray_lut(f, s_lut_gray);
+    } else {
+        build_channel_lut(f, f->gain_r * 256 / 100, s_lut_r);
+        build_channel_lut(f, f->gain_g * 256 / 100, s_lut_g);
+        build_channel_lut(f, f->gain_b * 256 / 100, s_lut_b);
+    }
+    s_lut_cached = *f;
+    s_lut_valid = true;
+}
+
 void hw2d_apply_filter_lut(uint16_t *dst, const uint16_t *src, uint32_t npix,
                            const hw2d_filter_t *f)
 {
     uint32_t i;
 
-    /* 按内容 (而非指针) 判断是否需要重建: UI 侧复用同一个结构体地址
-     * 修改参数 (切滤镜/调美白), 指针比较会漏掉重建, 导致陈旧 LUT。 */
-    if (!s_lut_valid || memcmp(&s_lut_cached, f, sizeof(*f)) != 0) {
-        s_lut_is_gray = filter_is_gray(f);
-        if (s_lut_is_gray) {
-            build_gray_lut(f, s_lut_gray);
-        } else {
-            build_channel_lut(f, f->gain_r * 256 / 100, s_lut_r);
-            build_channel_lut(f, f->gain_g * 256 / 100, s_lut_g);
-            build_channel_lut(f, f->gain_b * 256 / 100, s_lut_b);
-        }
-        s_lut_cached = *f;
-        s_lut_valid = true;
-    }
+    ensure_lut(f);
 
     if (s_lut_is_gray) {
         /* 灰度路径: 逐像素真实亮度 Y -> 单通道 LUT */
@@ -177,6 +180,41 @@ void hw2d_apply_filter_lut(uint16_t *dst, const uint16_t *src, uint32_t npix,
         uint8_t  g = s_lut_g[UNPACK_G(p)];
         uint8_t  b = s_lut_b[UNPACK_B(p)];
         dst[i] = PACK_RGB565(r, g, b);
+    }
+}
+
+/*
+ * 预览专用融合算子: 2:1 盒均值降采样 + LUT 滤镜, 单遍完成。
+ * src 尺寸必须恰为 (2*dw) x (2*dh) (VGA->QVGA)。较 "双线性缩放 + LUT"
+ * 两遍省一次 QVGA 缓冲读写, 且 2x2 均值只做加法移位。
+ * 与预览 LUT 共享静态表 —— 仅限单任务 (LVGL/core0) 使用。
+ */
+void hw2d_scale2x_lut(uint16_t *dst, const uint16_t *src,
+                      uint32_t dw, uint32_t dh, const hw2d_filter_t *f)
+{
+    ensure_lut(f);
+    uint32_t sw = dw * 2;
+    for (uint32_t y = 0; y < dh; y++) {
+        const uint16_t *r0 = src + (size_t)(y * 2) * sw;
+        const uint16_t *r1 = r0 + sw;
+        uint16_t *o = dst + (size_t)y * dw;
+        for (uint32_t x = 0; x < dw; x++) {
+            uint16_t p00 = r0[x * 2], p01 = r0[x * 2 + 1];
+            uint16_t p10 = r1[x * 2], p11 = r1[x * 2 + 1];
+            uint8_t r = (uint8_t)((UNPACK_R(p00) + UNPACK_R(p01) +
+                                   UNPACK_R(p10) + UNPACK_R(p11)) >> 2);
+            uint8_t g = (uint8_t)((UNPACK_G(p00) + UNPACK_G(p01) +
+                                   UNPACK_G(p10) + UNPACK_G(p11)) >> 2);
+            uint8_t b = (uint8_t)((UNPACK_B(p00) + UNPACK_B(p01) +
+                                   UNPACK_B(p10) + UNPACK_B(p11)) >> 2);
+            if (s_lut_is_gray) {
+                uint8_t yv = (uint8_t)((r * 38 + g * 75 + b * 15) >> 7);
+                uint8_t v = s_lut_gray[yv];
+                o[x] = PACK_RGB565(v, v, v);
+            } else {
+                o[x] = PACK_RGB565(s_lut_r[r], s_lut_g[g], s_lut_b[b]);
+            }
+        }
     }
 }
 
@@ -524,6 +562,8 @@ static struct {
     uint64_t us_scale;
     uint32_t n_copy;
     uint64_t us_copy;
+    uint32_t n_fused;
+    uint64_t us_fused;
 } s_stats;
 
 void hw2d_stats_reset(void)
@@ -557,6 +597,10 @@ void hw2d_stats_dump(void)
     if (s_stats.n_copy) {
         printf("[hw2d] copy       : %lu calls, avg %llu us\n",
                (unsigned long)s_stats.n_copy, s_stats.us_copy / s_stats.n_copy);
+    }
+    if (s_stats.n_fused) {
+        printf("[hw2d] scale2x_lut: %lu calls, avg %llu us\n",
+               (unsigned long)s_stats.n_fused, s_stats.us_fused / s_stats.n_fused);
     }
 }
 
@@ -606,6 +650,15 @@ void hw2d_scale_stat(const uint16_t *src, uint32_t w_src, uint32_t h_src,
     hw2d_scale(src, w_src, h_src, dst, w_dst, h_dst);
     s_stats.n_scale++;
     s_stats.us_scale += HW2D_TIME_US() - t0;
+}
+
+void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
+                           uint32_t dw, uint32_t dh, const hw2d_filter_t *f)
+{
+    uint32_t t0 = HW2D_TIME_US();
+    hw2d_scale2x_lut(dst, src, dw, dh, f);
+    s_stats.n_fused++;
+    s_stats.us_fused += HW2D_TIME_US() - t0;
 }
 
 esp_err_t hw2d_init(void)

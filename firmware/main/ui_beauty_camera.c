@@ -52,6 +52,7 @@
 #include "pvc_feed.h"
 #include "pvc_store.h"      /* boot 计数: 相册文件名跨重启唯一 */
 #include "pvc_clock.h"
+#include "pvc_jpeg.h"
 #include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
@@ -205,26 +206,17 @@ static void blend_circle(uint16_t *canvas, int cx, int cy, int r, uint8_t alpha)
     }
 }
 
-/* src 必须是 UI_W x UI_H (QVGA) 尺寸 */
-static void render_preview(const uint16_t *src)
+/* 贴纸与缩略图刷新 (canvas 已含滤镜后画面; thumb_src 为未滤镜 QVGA 或 NULL) */
+static void render_overlays(const uint16_t *thumb_src)
 {
-    /* 滤镜 LUT 输出到 canvas (QVGA 直接读 DMA 缓冲, VGA 读降采样缓冲) */
-    hw2d_filter_lut_stat(s_canvas_buf, src, UI_W * UI_H, &s_active_filter);
-
     /* 贴纸 (SRC_OVER 硬件混合): 兔耳两个圆 */
     if (s_sticker >= 0 && s_sticker < 6) {
         blend_circle(s_canvas_buf, 84, 30, 21, 170);
         blend_circle(s_canvas_buf, 236, 30, 21, 170);
         blend_circle(s_canvas_buf, 160, 26, 14, 200); /* 头顶装饰 */
     }
-
     lv_obj_invalidate(s_canvas);
-
-    /* 每 ~8 帧 (320ms) 刷新一次滤镜缩略图 */
-    if (s_thumb_dirty || (++s_frame_cnt & 7u) == 0) {
-        s_thumb_dirty = false;
-        update_thumbs(src);
-    }
+    if (thumb_src) update_thumbs(thumb_src);
 }
 
 static void preview_timer_cb(lv_timer_t *t)
@@ -238,13 +230,27 @@ static void preview_timer_cb(lv_timer_t *t)
     /* 性能监控: 统计每帧渲染总耗时 (验证 hw2d 硬件加速预算) */
     static uint32_t perf_frames = 0, perf_rend_us = 0, perf_last_ms = 0;
     uint32_t t0 = (uint32_t)esp_timer_get_time();
-    if (f->width == CAP_W && f->height == CAP_H && s_preview_qvga) {
-        /* VGA 采集 -> hw2d 定点双线性降采样到 QVGA 预览 (零拷贝直读 DMA 帧) */
-        hw2d_scale_stat(f->buf, CAP_W, CAP_H, s_preview_qvga, UI_W, UI_H);
-        render_preview(s_preview_qvga);
+    bool thumb_due = s_thumb_dirty || ((++s_frame_cnt & 7u) == 0);
+    if (f->width == CAP_W && f->height == CAP_H) {
+        /* VGA: 融合算子单遍完成 2:1 盒均值降采样 + LUT 滤镜 (直读 DMA 帧) */
+        hw2d_scale2x_lut_stat(s_canvas_buf, f->buf, UI_W, UI_H, &s_active_filter);
+        /* 缩略图需要未滤镜的 QVGA 源, 仅在到期帧 (每 8 帧) 额外产出 */
+        if (thumb_due && s_preview_qvga) {
+            hw2d_scale_stat(f->buf, CAP_W, CAP_H, s_preview_qvga, UI_W, UI_H);
+            s_thumb_dirty = false;
+            render_overlays(s_preview_qvga);
+        } else {
+            render_overlays(NULL);
+        }
     } else if (f->width == UI_W && f->height == UI_H) {
-        /* QVGA 回退路径 (相机初始化降级时) */
-        render_preview(f->buf);
+        /* QVGA 回退路径 (相机初始化降级时): 走原两遍路径 */
+        hw2d_filter_lut_stat(s_canvas_buf, f->buf, UI_W * UI_H, &s_active_filter);
+        if (thumb_due) {
+            s_thumb_dirty = false;
+            render_overlays(f->buf);
+        } else {
+            render_overlays(NULL);
+        }
     }
     perf_frames++;
     perf_rend_us += (uint32_t)esp_timer_get_time() - t0;
@@ -287,26 +293,13 @@ static void update_thumbs(const uint16_t *src)
 /* ================= 相册 JPEG 存取 ================= */
 static bool jpeg_dims(const uint8_t *jpg, size_t len, uint32_t *w, uint32_t *h);
 
-/* RGB565 (小端) -> 高质量 JPEG 落盘。fmt2jpg 为软编码 (S3 无 JPEG 硬件)。 */
-static bool save_jpg(const char *path, const uint16_t *rgb565_buf,
-                     uint32_t w, uint32_t h, uint8_t quality)
+/* 编码产物落盘 (编码本身在 worker 用 pvc_jpeg + 复用缓冲完成) */
+static bool write_file(const char *path, const uint8_t *data, size_t len)
 {
-    uint32_t bytes = w * h * 2;
-    uint8_t *be = PSRAM_MALLOC(bytes);
-    if (!be) return false;
-    hw2d_swap16((uint16_t *)be, rgb565_buf, w * h);   /* PIE 加速 (可用时) */
-    uint8_t *jpg = NULL;
-    size_t jlen = 0;
-    bool ok = fmt2jpg(be, bytes, (uint16_t)w, (uint16_t)h,
-                      PIXFORMAT_RGB565, quality, &jpg, &jlen);
-    PSRAM_FREE(be);
-    if (!ok || !jpg) return false;
-
     FILE *fp = fopen(path, "wb");
-    ok = fp && fwrite(jpg, 1, jlen, fp) == jlen;
+    bool ok = fp && fwrite(data, 1, len, fp) == len;
     if (fp) fclose(fp);
-    free(jpg);
-    if (!ok) ESP_LOGE(TAG, "save %s failed", path);
+    if (!ok) ESP_LOGE(TAG, "write %s failed", path);
     return ok;
 }
 
@@ -376,7 +369,8 @@ static const char *const k_filter_api_id[HW2D_FILTER_MAX] = {
  *   - PIE 每核仅一个使用者 (core0=LVGL, core1=worker), 寄存器组天然隔离
  */
 typedef struct {
-    uint16_t     *snap;        /* VGA 帧, worker 负责释放 */
+    uint16_t     *snap;        /* VGA 帧 (缓冲池槽位, worker 归还) */
+    int           slot;        /* 池槽位号 */
     uint32_t      w, h;
     hw2d_filter_t filter;      /* 快门时刻的合成滤镜参数 (含美白) */
     int           smooth;
@@ -389,6 +383,42 @@ typedef struct {
 
 static QueueHandle_t s_photo_q;
 
+/* ---- 快照缓冲池: 预分配 3 x 600KB, 消除拍照路径反复 malloc/free ----
+ * 3 = 队列深 2 + 处理中 1; 池空即拒拍 (与队满同语义)。
+ * acquire 在 LVGL 任务, release 在 worker: 自旋临界区保护位图。 */
+#define SNAP_POOL_N 3
+static uint16_t *s_snap_pool[SNAP_POOL_N];
+static uint8_t   s_snap_used_mask;
+static portMUX_TYPE s_pool_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static int snap_acquire(void)
+{
+    int slot = -1;
+    taskENTER_CRITICAL(&s_pool_mux);
+    for (int i = 0; i < SNAP_POOL_N; i++) {
+        if (s_snap_pool[i] && !(s_snap_used_mask & (1u << i))) {
+            s_snap_used_mask |= (1u << i);
+            slot = i;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_pool_mux);
+    return slot;
+}
+
+static void snap_release(int slot)
+{
+    taskENTER_CRITICAL(&s_pool_mux);
+    s_snap_used_mask &= (uint8_t)~(1u << slot);
+    taskEXIT_CRITICAL(&s_pool_mux);
+}
+
+/* worker 专属复用缓冲 (串行处理, 每类一份): 磨皮工作区 / QVGA / 编码输出 */
+static uint16_t *s_wk_work;                     /* CAP_BYTES */
+static uint16_t *s_wk_qvga;                     /* FRAME_BYTES */
+static uint8_t  *s_wk_enc;                      /* 编码输出 */
+#define WK_ENC_CAP (320 * 1024)
+
 static void photo_worker(void *arg)
 {
     (void)arg;
@@ -399,67 +429,65 @@ static void photo_worker(void *arg)
         uint32_t pw = job.w, ph = job.h;
         uint32_t pbytes = pw * ph * 2;
 
-        uint16_t *work = PSRAM_MALLOC(pbytes);
-        if (work) {
+        /* 磨皮 + 精确滤镜 (复用缓冲; s_wk_work 缺失时降级存原图) */
+        if (s_wk_work) {
             if (job.smooth > 0) {
-                hw2d_blur3x3(work, job.snap, pw, ph, (uint8_t)job.smooth);
+                hw2d_blur3x3(s_wk_work, job.snap, pw, ph, (uint8_t)job.smooth);
             } else {
-                memcpy(work, job.snap, pbytes);
+                memcpy(s_wk_work, job.snap, pbytes);
             }
         }
         int64_t t_blur = esp_timer_get_time();
-        if (work) {
-            hw2d_apply_filter_exact(job.snap, work, pw * ph, &job.filter);
-            PSRAM_FREE(work);
+        if (s_wk_work) {
+            hw2d_apply_filter_exact(job.snap, s_wk_work, pw * ph, &job.filter);
         }
         int64_t t_filter = esp_timer_get_time();
 
-        /* 相册: VGA 高质量 JPEG (q90)。文件名带 boot 计数, 跨重启不覆盖
-         * (原 RAM seq 重启归零会覆盖旧照片) */
-        mkdir("/sdcard/DCIM", 0755);
+        /* 相册: VGA q90 (esp_new_jpeg, RGB565 LE 直入无字节交换)。
+         * 文件名带 boot 计数, 跨重启不覆盖。 */
         char path[64];
         snprintf(path, sizeof(path), "/sdcard/DCIM/img_%05lu_%03lu.jpg",
                  (unsigned long)pvc_store_boot_count(), (unsigned long)job.seq);
-        save_jpg(path, job.snap, pw, ph, 90);
+        size_t alen = 0;
+        if (s_wk_enc) {
+            alen = pvc_jpeg_encode(job.snap, pw, ph, 90, s_wk_enc, WK_ENC_CAP);
+            if (alen) {
+                mkdir("/sdcard/DCIM", 0755);
+                write_file(path, s_wk_enc, alen);
+            }
+        }
         int64_t t_save = esp_timer_get_time();
-        PVC_EV("photo_captured w=%lu h=%lu file=%s",
-               (unsigned long)pw, (unsigned long)ph,
+        PVC_EV("photo_captured w=%lu h=%lu bytes=%u file=%s",
+               (unsigned long)pw, (unsigned long)ph, (unsigned)alen,
                path + sizeof("/sdcard/DCIM/") - 1);
 
-        /* 上传: 融合缩放+大端输出 (hw2d_scale_be) -> q90 JPEG, 无独立 swap 遍 */
-        uint8_t *jpg = NULL;
+        /* 上传: 缩放到 QVGA (LE) -> q90 编码, 超 100KB 逐档降质 */
         size_t jlen = 0;
         int scale_ms = 0, encode_ms = 0;
-        uint8_t *be = PSRAM_MALLOC(FRAME_BYTES);
-        if (be) {
-            hw2d_scale_be(job.snap, pw, ph, (uint16_t *)be, UI_W, UI_H);
+        if (s_wk_qvga && s_wk_enc) {
+            hw2d_scale(job.snap, pw, ph, s_wk_qvga, UI_W, UI_H);
             int64_t t_scale = esp_timer_get_time();
             static const uint8_t k_qualities[] = { 90, 80, 60 };
             for (unsigned qi = 0; qi < sizeof(k_qualities); qi++) {
-                if (jpg) { free(jpg); jpg = NULL; }
-                if (!fmt2jpg(be, FRAME_BYTES, UI_W, UI_H, PIXFORMAT_RGB565,
-                             k_qualities[qi], &jpg, &jlen)) {
-                    jpg = NULL;
-                    break;
-                }
-                if (jlen <= 100 * 1024) break;
+                jlen = pvc_jpeg_encode(s_wk_qvga, UI_W, UI_H, k_qualities[qi],
+                                       s_wk_enc, WK_ENC_CAP);
+                if (jlen && jlen <= 100 * 1024) break;
             }
-            PSRAM_FREE(be);
             scale_ms = (int)((t_scale - t_save) / 1000);
             encode_ms = (int)((esp_timer_get_time() - t_scale) / 1000);
         }
-        PSRAM_FREE(job.snap);
-        PVC_EV("perf_encode scale_ms=%d encode_ms=%d bytes=%u",
+        snap_release(job.slot);        /* VGA 帧此后不再使用, 尽早归还池 */
+        PVC_EV("perf_encode scale_ms=%d encode_ms=%d bytes=%u lib=espjpeg",
                scale_ms, encode_ms, (unsigned)jlen);
 
-        if (jpg && jlen <= 100 * 1024) {
+        if (jlen && jlen <= 100 * 1024) {
             PVC_EV("photo_encoded bytes=%u filter=%s beauty=%d",
                    (unsigned)jlen, k_filter_api_id[job.fid], job.white);
-            pvc_net_enqueue_photo(jpg, jlen, k_filter_api_id[job.fid], job.white);
+            pvc_net_enqueue_photo(s_wk_enc, jlen, k_filter_api_id[job.fid],
+                                  job.white);   /* enqueue 内部拷贝/落盘 */
         } else {
             ESP_LOGE(TAG, "jpeg encode failed or oversize");
         }
-        if (jpg) free(jpg);
 
         PVC_EV("perf_photo core=1 grab_ms=%d queue_ms=%d blur_ms=%d filter_ms=%d "
                "save_ms=%d total_ms=%d",
@@ -495,22 +523,25 @@ static void take_photo(void)
     lv_obj_invalidate(s_canvas);
     lv_refr_now(NULL);
 
-    uint16_t *snap = PSRAM_MALLOC(CAP_BYTES);
-    if (!snap) {
-        toast_show("内存不足");
+    int slot = snap_acquire();
+    if (slot < 0) {
+        PVC_EV("photo_drop reason=pool");
+        toast_show("处理中, 稍候再拍");
         return;
     }
+    uint16_t *snap = s_snap_pool[slot];
 
     /* 抓最新帧: esp_camera 阻塞至 DMA 完成一帧 (闪白后的画面), 零拷贝读取 */
     f = app_camera_grab();
     if (!f) {
-        PSRAM_FREE(snap);
+        snap_release(slot);
         toast_show("抓帧失败");
         return;
     }
     static uint32_t s_seq = 0;
     photo_job_t job = {
         .snap = snap,
+        .slot = slot,
         .w = f->width, .h = f->height,      /* VGA 正常 / QVGA 降级均可 */
         .filter = s_active_filter,          /* 按值快照, 与 UI 后续修改解耦 */
         .smooth = s_smooth,
@@ -524,7 +555,7 @@ static void take_photo(void)
     job.grab_ms = (int)((esp_timer_get_time() - t0) / 1000);
 
     if (xQueueSend(s_photo_q, &job, 0) != pdTRUE) {
-        PSRAM_FREE(snap);
+        snap_release(slot);
         PVC_EV("photo_drop reason=busy");
         toast_show("处理中, 稍候再拍");
         return;
@@ -1342,7 +1373,12 @@ void ui_beauty_camera_create(void)
 
     update_status();
 
-    /* 拍照后处理 worker: core1, 快门不阻塞预览; 队列深 2, 满则拒拍 */
+    /* 拍照后处理 worker: core1, 快门不阻塞预览; 队列深 2, 满则拒拍。
+     * 缓冲全部预分配 (快照池 3x600KB + work/qvga/enc), 拍照路径零 malloc */
+    for (int i = 0; i < SNAP_POOL_N; i++) s_snap_pool[i] = PSRAM_MALLOC(CAP_BYTES);
+    s_wk_work = PSRAM_MALLOC(CAP_BYTES);
+    s_wk_qvga = PSRAM_MALLOC(FRAME_BYTES);
+    s_wk_enc  = PSRAM_MALLOC(WK_ENC_CAP);
     s_photo_q = xQueueCreate(2, sizeof(photo_job_t));
     if (s_photo_q) {
         xTaskCreatePinnedToCore(photo_worker, "photo_wk", 8192, NULL, 3, NULL, 1);
