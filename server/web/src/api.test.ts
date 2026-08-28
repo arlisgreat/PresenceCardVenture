@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getFeed, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
   const originalFetch = globalThis.fetch
@@ -24,6 +24,22 @@ test('reaction helpers propagate service failures so the view can roll back opti
   try {
     await assert.rejects(() => reactToPhoto('p_1', true), /REACTION_UNAVAILABLE|Request failed: 503/)
     await assert.rejects(() => pokePhoto('p_1'), /REACTION_UNAVAILABLE|Request failed: 503/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('feed keeps seeded asset identity when a new photo changes server ordering', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ items: [
+    { photo_id: 'p_ai_new', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'none', image_url: '/v1/photos/p_ai_new/image', reactions: {} },
+    { photo_id: 'p_demo_1', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', image_url: '/v1/photos/p_demo_1/image', reactions: {} },
+    { photo_id: 'p_demo_2', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'none', image_url: '/v1/photos/p_demo_2/image', reactions: {} },
+  ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+  try {
+    const feed = await getFeed()
+    assert.equal(feed[1].image_url, '/assets/feed-window.jpg')
+    assert.equal(feed[2].image_url, '/assets/feed-portrait.jpg')
   } finally {
     globalThis.fetch = originalFetch
   }

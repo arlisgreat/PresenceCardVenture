@@ -113,6 +113,13 @@ const demoFeed: FeedItem[] = [
   { id: 'seed-3', author: { username: 'luna', display_name: '露娜' }, filter_id: 'ccd', caption: '今天也有好好在场。', created_at: new Date(Date.now() - 1000 * 60 * 160).toISOString(), image_url: '/assets/feed-friends.jpg', reactions: { heart: 19, star: 7 }, my_reactions: [], circle: '宿舍窗台' },
 ]
 
+const demoAssetByPhotoId: Record<string, string> = {
+  p_demo_1: '/assets/feed-window.jpg',
+  p_demo_2: '/assets/feed-portrait.jpg',
+  p_demo_3: '/assets/feed-friends.jpg',
+  p_demo_4: '/assets/feed-window.jpg',
+}
+
 export function filterFeedByCircle(feed: FeedItem[], circle: string): FeedItem[] {
   if (circle === '全部') return feed
   return feed.filter(item => item.circle === circle)
@@ -138,7 +145,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 export async function getFeed(): Promise<FeedItem[]> {
   try {
     const data = await request<{ items?: FeedItem[] }>('/feed?limit=20')
-    return (data.items ?? []).map((item, index) => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoFeed[index % demoFeed.length].image_url } : { ...item, id: item.photo_id ?? item.id })
+    return (data.items ?? []).map(item => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoAssetByPhotoId[item.photo_id] ?? item.image_url } : { ...item, id: item.photo_id ?? item.id })
   } catch {
     return demoFeed
   }
