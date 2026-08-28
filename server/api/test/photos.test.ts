@@ -281,3 +281,23 @@ test('keeps photo metadata when the injected repository cannot delete', async ()
   assert.ok(feed.json().items.some((item: any) => item.photo_id === photoId))
   await app.close()
 })
+
+test('recovers persisted photo metadata for image reads and deletion after restart', async () => {
+  const persisted = { id: '33333333-3333-4333-8333-333333333333', authorId: 'u_demo_1', filterId: 'film', playType: 'ccd', beauty: 0, sticker: 'none', caption: '重启后仍在', circle: '小圈', width: 320, height: 240, createdAt: new Date().toISOString(), original: jpeg, processed: jpeg }
+  const removed: string[] = []
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async () => undefined,
+    findByIdempotency: async () => undefined,
+    findById: async (id: string) => id === persisted.id ? persisted : undefined,
+    remove: async (id: string) => { removed.push(id) },
+  }
+  const photoStorage = { save: async () => undefined, read: async () => jpeg, remove: async () => undefined }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-restart', photoMetadataRepository, photoStorage })
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${persisted.id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 200)
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${persisted.id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 204)
+  assert.deepEqual(removed, [persisted.id])
+  await app.close()
+})

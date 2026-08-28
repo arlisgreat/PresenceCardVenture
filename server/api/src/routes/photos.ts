@@ -56,7 +56,8 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
   })
   app.get('/photos/:id/image', async (r, reply) => {
     const { account: u } = await auth(r, store, devicePairStore)
-    const p = store.photos.get((r.params as any).id)
+    const photoId = String((r.params as any).id)
+    const p = store.photos.get(photoId) ?? (photoMetadataRepository ? await photoMetadataRepository.findById(photoId) : undefined)
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND', 'photo not found'))
     if (!store.isFriend(u.id, p.authorId)) return reply.code(403).send(errorBody('FORBIDDEN', 'photo is not visible to this user'))
@@ -85,7 +86,8 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const persistentDevice = devicePairStore ? await devicePairStore.deviceForToken(token) : undefined
     const u = store.userForToken(token) ?? (persistentDevice?.userId ? store.user(persistentDevice.userId) : undefined) ?? persistentDevice?.user
     const device = store.deviceForToken(token) ?? persistentDevice
-    const p = store.photos.get((r.params as any).id)
+    const photoId = String((r.params as any).id)
+    const p = store.photos.get(photoId) ?? (photoMetadataRepository ? await photoMetadataRepository.findById(photoId) : undefined)
     if (!u) return reply.code(device ? 403 : 401).send(errorBody(device ? 'FORBIDDEN' : 'TOKEN_INVALID', device ? 'device token cannot delete photos' : 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found'))
     if (p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN','not owner'))
