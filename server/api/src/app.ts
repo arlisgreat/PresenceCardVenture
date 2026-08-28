@@ -39,7 +39,7 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
       persistence_provider: persistenceProvider === 'prisma',
       persistence_adapter: persistenceProvider === 'prisma' && persistenceAdapter === 'prisma',
       session_adapter: persistenceProvider === 'prisma' && sessionAdapter === 'prisma',
-      device_adapter: persistenceProvider === 'prisma' && deviceAdapter === 'prisma',
+      device_adapter: persistenceProvider === 'prisma' && deviceAdapter === 'prisma' && devicePairStore?.complete === true,
       device_token_encryption: persistenceProvider === 'prisma' && Boolean(process.env.DEVICE_TOKEN_ENCRYPTION_KEY),
     }
     const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : name === 'persistence_provider' ? 'PERSISTENCE_PROVIDER' : name === 'persistence_adapter' ? 'PRISMA_STORE_ADAPTER' : name === 'session_adapter' ? 'PRISMA_SESSION_ADAPTER' : name === 'device_adapter' ? 'PRISMA_DEVICE_ADAPTER' : name === 'device_token_encryption' ? 'DEVICE_TOKEN_ENCRYPTION_KEY' : 'DATABASE_URL')
@@ -76,7 +76,7 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     if (idempotencyKey) { device.configIdempotencyKey = idempotencyKey; device.configResponse = response }
     return reply.code(202).send(response)
   })
-  app.register(async (scope)=>photoRoutes(scope,{store,files}),{prefix:'/v1'}); app.register(async scope=>socialRoutes(scope,store),{prefix:'/v1'}); app.register(async scope=>aiRoutes(scope,store,options.aiProvider,files),{prefix:'/v1'})
+  app.register(async (scope)=>photoRoutes(scope,{store,files,devicePairStore}),{prefix:'/v1'}); app.register(async scope=>socialRoutes(scope,store),{prefix:'/v1'}); app.register(async scope=>aiRoutes(scope,store,options.aiProvider,files),{prefix:'/v1'})
   app.get('/v1/device/state', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const user=store.userForToken(token);const device=[...store.devices.values()].find(d=>d.token===token);const owner=user ?? (device?.userId ? store.user(device.userId) : undefined);if(!owner)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const pending_friend_requests=[...store.friendRequests.values()].filter(x=>x.status==='pending'&&x.addresseeId===owner.id).length;return {unseen_count:store.visiblePhotos(owner.id).length,pending_friend_requests,server_time:new Date().toISOString(),fw_latest:null,pending_config:device?.pendingConfig ?? null,active_config:device?.activeConfig ?? null}})
   app.post('/v1/device/heartbeat', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const d=[...store.devices.values()].find(x=>x.token===token);if(!d)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));d.lastSeen=new Date().toISOString();return reply.code(204).send()})
   app.post('/v1/device/ack', async (r:any, reply) => { const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,''); const device=[...store.devices.values()].find(d=>d.token===token); if(!device)return reply.code(401).send(errorBody('TOKEN_INVALID','device token required')); const configId=(r.body as any)?.config_id; if(configId && device.pendingConfig?.id===configId) { device.activeConfig=device.pendingConfig; device.pendingConfig=undefined } return reply.code(204).send() })

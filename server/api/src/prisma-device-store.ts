@@ -8,22 +8,25 @@ export type DeviceRecord = {
   tokenHash?: string | null
   tokenCiphertext?: string | null
   fwVersion?: string | null
-  user?: { username: string; displayName: string } | null
+  user?: { id: string; username: string; displayName: string; friendCode: string } | null
 }
 
 export type DeviceClient = {
   device: {
     upsert(args: any): Promise<DeviceRecord>
     findUnique(args: any): Promise<DeviceRecord | null>
+    findFirst(args: any): Promise<DeviceRecord | null>
     update(args: any): Promise<DeviceRecord>
   }
 }
 
 export interface DevicePairStore {
   readonly provider: string
+  readonly complete?: boolean
   savePairCode(deviceId: string, pairCode: string, expiresAt: Date, fwVersion?: string): Promise<void>
   bind(deviceId: string, pairCode: string, userId: string): Promise<{ deviceId: string; deviceToken: string }>
   status(deviceId: string, pairCode: string): Promise<{ status: 'pending' | 'bound'; deviceToken?: string; userId?: string; user?: { username: string; displayName: string } }>
+  deviceForToken(token?: string): Promise<{ id: string; userId?: string; user?: { id: string; username: string; displayName: string; friendCode: string } } | undefined>
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -45,6 +48,7 @@ const decrypt = (value: string, secret: string) => {
 /** Prisma-backed pairing state. Plain device tokens are returned only at bind time. */
 export class PrismaDeviceStore implements DevicePairStore {
   readonly provider = 'prisma' as const
+  readonly complete = false
 
   constructor(
     private readonly client: DeviceClient,
@@ -75,6 +79,14 @@ export class PrismaDeviceStore implements DevicePairStore {
       data: { userId, tokenHash: hash(deviceToken), ...tokenData },
     })
     return { deviceId, deviceToken }
+  }
+
+  async deviceForToken(token?: string) {
+    const secret = String(token ?? '').trim()
+    if (!secret) return undefined
+    const device = await this.client.device.findFirst({ where: { tokenHash: hash(secret) }, include: { user: true } })
+    if (!device || !device.userId) return undefined
+    return { id: device.id, userId: device.userId, ...(device.user ? { user: { id: device.user.id, username: device.user.username, displayName: device.user.displayName, friendCode: device.user.friendCode } } : {}) }
   }
 
   async status(deviceId: string, pairCode: string): Promise<{ status: 'pending' | 'bound'; deviceToken?: string; userId?: string; user?: { username: string; displayName: string } }> {

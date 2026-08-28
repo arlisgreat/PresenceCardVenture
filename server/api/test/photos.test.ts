@@ -212,3 +212,18 @@ test('photo downloads require authentication and an authorized relationship', as
   assert.equal(authorized.headers['content-type'], 'image/jpeg')
   await app.close()
 })
+
+test('accepts a persistent device token for photo upload after pairing', async () => {
+  const devicePairStore = {
+    provider: 'prisma',
+    savePairCode: async () => undefined,
+    bind: async () => ({ deviceId: 'dvc_persistent_upload', deviceToken: 'device-secret' }),
+    status: async () => ({ status: 'bound' as const, deviceToken: 'device-secret', userId: 'u_demo_1' }),
+    deviceForToken: async (token?: string) => token === 'device-secret' ? { id: 'dvc_persistent_upload', userId: 'u_demo_1', user: { id: 'u_demo_1', username: 'ayan', displayName: '阿岩', friendCode: '100001' } } : undefined,
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-persistent-device-upload', devicePairStore })
+  const response = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer device-secret', 'content-type': 'image/jpeg', 'idempotency-key': 'persistent-upload-1', 'x-device-id': 'dvc_persistent_upload', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  assert.equal(response.statusCode, 201)
+  assert.equal(response.json().photo_id.startsWith('p_'), true)
+  await app.close()
+})

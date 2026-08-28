@@ -11,6 +11,7 @@ function fakePrisma(device: any) {
     device: {
       upsert: async (args: any) => { calls.push({ method: 'upsert', args }); current = { ...current, ...args.create, ...args.update }; return current },
       findUnique: async (args: any) => { calls.push({ method: 'findUnique', args }); return current },
+      findFirst: async (args: any) => { calls.push({ method: 'findFirst', args }); return current },
       update: async (args: any) => { calls.push({ method: 'update', args }); current = { ...current, ...args.data }; return current },
     },
   }
@@ -73,4 +74,12 @@ test('requires an encryption key when configured for production pairing', async 
   const client = fakePrisma({ id: 'dvc-1', pairCode: '482913', pairExpiresAt: new Date('2026-08-28T12:10:00.000Z'), userId: null })
   const store = new PrismaDeviceStore(client as any, () => new Date('2026-08-28T12:00:00.000Z'), () => 'device-secret', { requireEncryption: true })
   await assert.rejects(() => store.bind('dvc-1', '482913', 'u_demo_1'), /DEVICE_TOKEN_KEY_MISSING/)
+})
+
+test('resolves a device bearer token by hash for subsequent device requests', async () => {
+  const client = fakePrisma({ id: 'dvc-1', userId: 'u_demo_1', tokenHash: createHash('sha256').update('device-secret').digest('hex') })
+  const store = new PrismaDeviceStore(client as any)
+  assert.deepEqual(await store.deviceForToken('device-secret'), { id: 'dvc-1', userId: 'u_demo_1' })
+  const lookup = client.calls.find(call => call.method === 'findFirst')
+  assert.deepEqual(lookup?.args, { where: { tokenHash: createHash('sha256').update('device-secret').digest('hex') }, include: { user: true } })
 })

@@ -2,17 +2,19 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { DemoStore, errorBody } from '../demo-store.js'
 import type { PhotoStorage } from '../photo-store.js'
+import type { DevicePairStore } from '../prisma-device-store.js'
 
-const auth = (r: FastifyRequest, store: DemoStore) => {
+const auth = async (r: FastifyRequest, store: DemoStore, devicePairStore?: DevicePairStore) => {
   const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
-  const device = store.deviceForToken(token)
-  const account = store.userForToken(token) ?? (device?.userId ? store.user(device.userId) : undefined)
+  const device = store.deviceForToken(token) ?? (devicePairStore ? await devicePairStore.deviceForToken(token) : undefined)
+  const persistentUser = device && 'user' in device ? device.user : undefined
+  const account = store.userForToken(token) ?? (device?.userId ? store.user(device.userId) : undefined) ?? persistentUser
   return { account, device }
 }
-export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStorage }) {
-  const { store, files } = opts
+export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStorage; devicePairStore?: DevicePairStore }) {
+  const { store, files, devicePairStore } = opts
   app.post('/photos', async (r, reply) => {
-    const { account: u, device } = auth(r, store); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
+    const { account: u, device } = await auth(r, store, devicePairStore); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
     const body = r.body as Buffer; if (!Buffer.isBuffer(body)) return reply.code(415).send(errorBody('BAD_CONTENT_TYPE','JPEG required'))
     if (body.length > 1024 * 1024) return reply.code(413).send(errorBody('PHOTO_TOO_LARGE','image exceeds 1048576 bytes'))
     if (body.length < 2 || body[0] !== 0xff || body[1] !== 0xd8) return reply.code(415).send(errorBody('BAD_CONTENT_TYPE','JPEG required'))
@@ -47,7 +49,7 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     return reply.code(201).send(uploadResult(p, store))
   })
   app.get('/photos/:id/image', async (r, reply) => {
-    const { account: u } = auth(r, store)
+    const { account: u } = await auth(r, store, devicePairStore)
     const p = store.photos.get((r.params as any).id)
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND', 'photo not found'))
@@ -60,7 +62,7 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     }
   })
   const feed = async (r: FastifyRequest, reply: any, mine = false) => {
-    const { account: u } = auth(r, store)
+    const { account: u } = await auth(r, store, devicePairStore)
     if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     const rawLimit = (r.query as any)?.limit
     const parsedLimit = rawLimit === undefined ? 8 : Number(rawLimit)
@@ -74,8 +76,9 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
   app.delete('/photos/:id', async (r, reply) => {
     const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
-    const u = store.userForToken(token)
-    const device = store.deviceForToken(token)
+    const persistentDevice = devicePairStore ? await devicePairStore.deviceForToken(token) : undefined
+    const u = store.userForToken(token) ?? (persistentDevice?.userId ? store.user(persistentDevice.userId) : undefined) ?? persistentDevice?.user
+    const device = store.deviceForToken(token) ?? persistentDevice
     const p = store.photos.get((r.params as any).id)
     if (!u) return reply.code(device ? 403 : 401).send(errorBody(device ? 'FORBIDDEN' : 'TOKEN_INVALID', device ? 'device token cannot delete photos' : 'token invalid'))
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found'))
