@@ -5,6 +5,7 @@
 #include "pvc_upload.h"
 #include "pvc_feed.h"
 #include "pvc_config.h"
+#include "pvc_trace.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -35,7 +36,11 @@ static volatile bool s_feed_synced;   /* 本次启动后 feed 是否成功轮询
 
 static void set_state(pvc_net_state_t st, const char *detail)
 {
+    static const char *const names[] = {
+        "idle", "provisioning", "wifi_connecting", "pairing", "online", "offline"
+    };
     s_state = st;
+    PVC_EV("net state=%s detail=%s", names[st], detail ? detail : "-");
     if (s_ui.status) s_ui.status(st, detail);
 }
 
@@ -51,10 +56,12 @@ static void wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(s_ev, BIT_WIFI_UP);
         if (s_provisioning) return;    /* 配网握手期的断连由 prov manager 处理 */
+        PVC_EV("wifi_down ok=0");
         set_state(PVC_NET_OFFLINE, "wifi lost");
         /* 事件循环内禁止阻塞: 立即重连, 驱动层自带扫描间隔即天然节流 */
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        PVC_EV("wifi_up ok=1");
         xEventGroupSetBits(s_ev, BIT_WIFI_UP);
     }
 }
@@ -162,6 +169,7 @@ static void net_task(void *arg)
                 pvc_store_clear_token();
                 continue;
             }
+            if (fresh < 0) PVC_EV("feed_err err=%d", fresh);
             if (fresh >= 0) {
                 last_feed_poll = now;
                 s_feed_synced = true;
@@ -207,8 +215,9 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
     esp_err_t err = pvc_store_init();
     if (err != ESP_OK) return err;
 
-    /* TLS 握手约需 40KB 堆 (§6); 任务栈给足 8KB 供 http+json */
-    BaseType_t ok = xTaskCreatePinnedToCore(net_task, "pvc_net", 8192, NULL,
+    /* TLS 握手约需 40KB 堆 (§6)。栈 16KB: fetch_state 栈上 2KB 响应缓冲
+     * + feed 槽位数组 ~1.6KB + mbedTLS 握手栈开销, 8KB 有溢出风险 */
+    BaseType_t ok = xTaskCreatePinnedToCore(net_task, "pvc_net", 16384, NULL,
                                             4, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

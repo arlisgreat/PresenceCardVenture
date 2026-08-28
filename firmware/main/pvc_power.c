@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "esp_system.h"     /* esp_get_free_heap_size */
 #include "esp_timer.h"
 #include "driver/gpio.h"
 
@@ -13,6 +14,7 @@
 #include "lvgl.h"
 
 #include "app_camera.h"
+#include "pvc_trace.h"
 #include "net/pvc_net.h"
 #include "net/pvc_upload.h"
 
@@ -33,15 +35,14 @@ static const char *TAG = "pvc_power";
 
 static bool s_quiet;
 
-/* LVGL 距上次触摸/按键的毫秒数 (加锁读取, 任意任务安全) */
-static uint32_t inactive_ms(void)
+/* LVGL 距上次触摸/按键的毫秒数 (加锁读取, 任意任务安全)。
+ * 返回 false = 没拿到显示锁, 本 tick 跳过判定 (宁可晚睡/晚醒也不误判)。 */
+static bool get_inactive(uint32_t *out)
 {
-    uint32_t v = 0;                       /* 取锁失败按 "刚活动过" 处理, 宁可晚睡 */
-    if (bsp_display_lock(100)) {
-        v = lv_display_get_inactive_time(NULL);
-        bsp_display_unlock();
-    }
-    return v;
+    if (!bsp_display_lock(100)) return false;
+    *out = lv_display_get_inactive_time(NULL);
+    bsp_display_unlock();
+    return true;
 }
 
 static void enter_sleep(const char *reason)
@@ -74,26 +75,41 @@ static void exit_quiet(void)
 static void power_task(void *arg)
 {
     (void)arg;
+    uint32_t tick = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+        /* 每 30s 心跳: 堆水位/队列深度, 供耐久测试做泄漏与阻塞检测 */
+        if ((++tick % 30) == 0) {
+            PVC_EV("stat heap=%lu min_heap=%lu queue=%d state=%d up_ms=%lu",
+                   (unsigned long)esp_get_free_heap_size(),
+                   (unsigned long)esp_get_minimum_free_heap_size(),
+                   pvc_upload_depth(), (int)pvc_net_state(),
+                   (unsigned long)(esp_timer_get_time() / 1000));
+        }
 
         pvc_net_state_t st = pvc_net_state();
         /* 配网 / 配对中用户正在跟屏幕交互, 不休眠 */
         bool interactive = (st == PVC_NET_PROVISIONING || st == PVC_NET_PAIRING);
 
+        uint32_t idle = 0;
+        if (!get_inactive(&idle)) continue;
+        uint32_t up = (uint32_t)(esp_timer_get_time() / 1000);
+
         if (s_quiet) {
-            if (interactive || inactive_ms() < 2000) {
+            /* "曾被触摸" 不能用 idle<阈值 判 (开机时 idle≈up 从 0 涨起, 必误判);
+             * 有输入事件时 LVGL 空闲计时归零, 只有 idle 明显小于开机时长才是真触摸 */
+            bool touched = (idle + 3000 < up);
+            if (interactive || touched) {
                 exit_quiet();
                 continue;
             }
-            uint32_t up = (uint32_t)(esp_timer_get_time() / 1000);
             if ((up >= QUIET_MIN_MS && pvc_net_synced()) || up >= QUIET_MAX_MS) {
                 enter_sleep(pvc_net_synced() ? "poll_done" : "poll_timeout");
             }
             continue;
         }
 
-        uint32_t idle = inactive_ms();
         if (idle < IDLE_SLEEP_MS || interactive) continue;
         /* 60s 无操作: 在线但还有待传/未拉取时给宽限, 干完再睡 */
         if (!pvc_net_synced() && st == PVC_NET_ONLINE &&
@@ -107,7 +123,7 @@ static void power_task(void *arg)
 void pvc_power_init(bool quiet_boot)
 {
     s_quiet = quiet_boot;
-    xTaskCreatePinnedToCore(power_task, "pvc_power", 3072, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(power_task, "pvc_power", 4096, NULL, 3, NULL, 0);
     ESP_LOGI(TAG, "power manager started (quiet=%d, touch_int=%d)",
              (int)quiet_boot, PVC_TOUCH_INT_GPIO);
 }

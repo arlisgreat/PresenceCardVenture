@@ -10,6 +10,8 @@
 #include "esp_log.h"
 #include "cJSON.h"
 
+#include "pvc_trace.h"
+
 static const char *TAG = "pvc_pair";
 
 #define POLL_INTERVAL_MS 3000       /* §1: 每 3 秒 */
@@ -98,7 +100,7 @@ esp_err_t pvc_pair_run(const pvc_net_ui_t *ui)
         }
         if (!got) return ESP_FAIL;
 
-        ESP_LOGI(TAG, "pair_code=%s expires=%ds", code, expires_s);
+        PVC_EV("pair_code code=%s expires=%d", code, expires_s);
         if (ui && ui->show_pair_code) ui->show_pair_code(code);
 
         int rounds = expires_s * 1000 / POLL_INTERVAL_MS;
@@ -106,6 +108,7 @@ esp_err_t pvc_pair_run(const pvc_net_ui_t *ui)
             vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
             esp_err_t st = poll_status(code);
             if (st == ESP_OK) {
+                PVC_EV("pair_bound ok=1");
                 if (ui && ui->hide_pair_code) ui->hide_pair_code();
                 return ESP_OK;
             }
@@ -113,6 +116,7 @@ esp_err_t pvc_pair_run(const pvc_net_ui_t *ui)
             /* pending / 偶发网络错: 继续轮询 */
         }
     }
+    PVC_EV("pair_fail ok=0");
     if (ui && ui->hide_pair_code) ui->hide_pair_code();
     return ESP_FAIL;
 }

@@ -51,6 +51,19 @@ main/
 
 固件 `X-Filter-Id`:`none / fair / warm / cool / bw / vintage`(对应 UI 原图/白皙/暖阳/冷调/黑白/复古)。
 
+## 自动化测试
+
+埋点统一为 `[EV] <event> k=v ...`(清单见 [main/pvc_trace.h](main/pvc_trace.h)),
+配合 `[FW]` 请求/睡眠日志构成完整判据。上板后:
+
+```bash
+pio device monitor -b 115200 | tee test_run.log     # 采集
+python3 test/analyze_log.py test_run.log            # 分析 (FAIL 退出码 1, 可接 CI)
+```
+
+用例矩阵(T1 冷启动 … T14 无 SD 降级)与检查项(C1 崩溃检测 … C12 延迟统计)见
+[test/testplan.md](test/testplan.md)。耐久测试看 `stat` 心跳的堆水位趋势(C11)。
+
 ## 真机待验证项
 
 - 上传/下发两处 RGB565↔JPEG 字节序(`upload_photo_qvga` / `render_feed` 内有注释)

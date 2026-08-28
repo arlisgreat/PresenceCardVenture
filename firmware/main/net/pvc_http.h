@@ -40,6 +40,7 @@ typedef struct {
     char  *buf;         /* 调用方提供的响应缓冲 (NUL 结尾) */
     size_t cap;
     size_t len;
+    bool   truncated;   /* 响应体超出 cap 被截断 (调用方应视为失败) */
 } pvc_http_resp_t;
 
 /*

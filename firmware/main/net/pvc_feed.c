@@ -2,6 +2,7 @@
 #include "pvc_config.h"
 #include "pvc_http.h"
 #include "pvc_store.h"
+#include "pvc_trace.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -182,7 +183,7 @@ static int fetch_image(const char *photo_id, uint8_t *buf, size_t cap)
                            .timeout_ms = 30000 };
     pvc_http_resp_t resp = { .buf = (char *)buf, .cap = cap };
     if (pvc_http_request(&req, &resp) != ESP_OK) return -1;
-    if (resp.status != 200) return -1;
+    if (resp.status != 200 || resp.truncated) return -1;   /* 超 160KB 的图不收 */
     return (int)resp.len;
 }
 
@@ -203,7 +204,10 @@ int pvc_feed_poll(void)
     int unseen = fetch_state();
     if (unseen < 0) return unseen;
     /* 无未读且本地已有缓存 -> 不拉 feed (§3.1); 缓存为空则强制拉一次 */
-    if (unseen == 0 && s_count > 0) return 0;
+    if (unseen == 0 && s_count > 0) {
+        PVC_EV("feed_poll unseen=0 skipped=1");
+        return 0;
+    }
 
     /* GET /feed (§3.2), 带 If-None-Match */
     char *rbuf = PSRAM_MALLOC(META_RESP_CAP);
@@ -216,6 +220,7 @@ int pvc_feed_poll(void)
     pvc_http_resp_t resp = { .buf = rbuf, .cap = META_RESP_CAP };
     esp_err_t herr = pvc_http_request(&req, &resp);
     if (herr != ESP_OK || resp.status == 304) {
+        if (herr == ESP_OK) PVC_EV("feed_poll unseen=%d not_modified=1", unseen);
         heap_caps_free(rbuf);
         return (herr == ESP_OK) ? 0 : PVC_FEED_ERR;
     }
@@ -292,12 +297,15 @@ int pvc_feed_poll(void)
     s_count = n_ok;
     xSemaphoreGive(s_lock);
 
+    /* 只有全部条目都拿到才存 etag: 部分失败时留旧 etag, 下轮重拉补齐缺图
+     * (否则 304 会让缺失的照片永远无法补回) */
     const cJSON *je = cJSON_GetObjectItem(j, "etag");
-    if (cJSON_IsString(je)) pvc_store_set_etag(je->valuestring);
+    if (cJSON_IsString(je) && n_ok == n_items) pvc_store_set_etag(je->valuestring);
     cJSON_Delete(j);
 
     sd_sync_index();
-    ESP_LOGI(TAG, "feed updated: %d item(s), %d new", n_ok, n_new);
+    PVC_EV("feed_poll unseen=%d items=%d new=%d complete=%d",
+           unseen, n_ok, n_new, (int)(n_ok == n_items));
     return n_new;
 }
 
@@ -370,7 +378,14 @@ int pvc_feed_process_reactions(void)
         };
         pvc_http_resp_t resp = { .buf = rbuf, .cap = sizeof(rbuf) };
         if (pvc_http_request(&req, &resp) != ESP_OK) continue;   /* 网络错: 丢弃 */
-        if (resp.status == 401) return PVC_FEED_AUTH;
+        PVC_EV("react_send id=%s type=%s status=%d", r.photo_id, r.type, resp.status);
+        /* 注意: server 的 reactions 路由目前不认设备 token (已提给全栈),
+         * 401 在此只丢弃告警, 不清 token —— 否则一次点赞就打掉配对。
+         * server 修复后可恢复严格语义 (return PVC_FEED_AUTH)。 */
+        if (resp.status == 401) {
+            ESP_LOGW(TAG, "reaction 401 (server device-token gap), dropped");
+            continue;
+        }
         /* 201/其它: 点赞尽力而为, 不重试 */
     }
 }

@@ -27,6 +27,7 @@ esp_err_t pvc_http_request(const pvc_http_req_t *req, pvc_http_resp_t *resp)
 
     resp->status = -1;
     resp->len = 0;
+    resp->truncated = false;
     if (resp->cap) resp->buf[0] = '\0';
 
     esp_http_client_config_t cfg = {
@@ -72,6 +73,12 @@ esp_err_t pvc_http_request(const pvc_http_req_t *req, pvc_http_resp_t *resp)
                 resp->len += (size_t)rd;
             }
             resp->buf[resp->len] = '\0';
+            /* 缓冲填满后还有数据 = 截断 (调用方按失败处理, 防解析半截 JSON/JPEG) */
+            char probe;
+            if (resp->len + 1 >= resp->cap &&
+                esp_http_client_read(c, &probe, 1) > 0) {
+                resp->truncated = true;
+            }
         }
     }
     uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);

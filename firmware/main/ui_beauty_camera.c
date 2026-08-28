@@ -49,6 +49,7 @@
 #include "app_camera.h"
 #include "pvc_net.h"
 #include "pvc_feed.h"
+#include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
 
@@ -421,11 +422,9 @@ static void upload_photo_qvga(const uint16_t *src, uint32_t w, uint32_t h)
         return;
     }
 
-    if (pvc_net_enqueue_photo(jpg, jlen, k_filter_api_id[s_filter],
-                              s_white) == ESP_OK) {
-        ESP_LOGI(TAG, "upload queued: %u bytes filter=%s beauty=%d",
-                 (unsigned)jlen, k_filter_api_id[s_filter], s_white);
-    }
+    PVC_EV("photo_encoded bytes=%u filter=%s beauty=%d",
+           (unsigned)jlen, k_filter_api_id[s_filter], s_white);
+    pvc_net_enqueue_photo(jpg, jlen, k_filter_api_id[s_filter], s_white);
     free(jpg);
 }
 
@@ -484,7 +483,8 @@ static void take_photo(void)
     static uint32_t seq = 0;
     snprintf(path, sizeof(path), "/sdcard/DCIM/img_%05lu.bmp", (unsigned long)seq++);
     save_bmp(path, snap, pw, ph);
-    ESP_LOGI(TAG, "photo saved: %s", path);
+    PVC_EV("photo_captured w=%lu h=%lu file=img_%05lu.bmp",
+           (unsigned long)pw, (unsigned long)ph, (unsigned long)(seq - 1));
 
     /* 上传闭环: 降采样 320x240 -> JPEG -> 幂等待传队列 (docs/02 §2) */
     upload_photo_qvga(snap, pw, ph);

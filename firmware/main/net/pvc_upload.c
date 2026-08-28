@@ -1,6 +1,7 @@
 #include "pvc_upload.h"
 #include "pvc_http.h"
 #include "pvc_store.h"
+#include "pvc_trace.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -121,7 +122,8 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
         fclose(f);
         if (wr == len) {
             list_append(it);
-            ESP_LOGI(TAG, "queued %s (%u bytes)", it->path, (unsigned)len);
+            PVC_EV("upload_queued key=%s bytes=%u store=sd depth=%d",
+                   it->key, (unsigned)len, pvc_upload_depth());
             return ESP_OK;
         }
         remove(it->path);
@@ -149,7 +151,8 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
     memcpy(it->buf, jpg, len);
     it->len = len;
     list_append(it);
-    ESP_LOGW(TAG, "queued in RAM only (no SD): key=%s %u bytes", it->key, (unsigned)len);
+    PVC_EV("upload_queued key=%s bytes=%u store=ram depth=%d",
+           it->key, (unsigned)len, pvc_upload_depth());
     return ESP_OK;
 }
 
@@ -229,11 +232,13 @@ pvc_up_result_t pvc_upload_drain(void)
             int status = item_post(it, jpg, len, rbuf, sizeof(rbuf));
             if (status == 201 || status == 200 || status == 409) {
                 /* 200/409 = 幂等键已处理过, 视为成功 (§0/§2) */
+                PVC_EV("upload_sent key=%s status=%d attempt=%d", it->key, status, attempt);
                 done = true;
                 break;
             }
             if (status == 401) { auth_fail = true; break; }
-            if (status == 400 || status == 413 || status == 415) {
+            if (status == 400 || status == 413 || status == 415 || status == 403) {
+                PVC_EV("upload_drop key=%s status=%d", it->key, status);
                 ESP_LOGE(TAG, "photo rejected (%d), dropping key=%s", status, it->key);
                 done = true;               /* 固件 bug 类: 丢弃防堵塞 */
                 break;
@@ -255,6 +260,7 @@ pvc_up_result_t pvc_upload_drain(void)
             if (it->path[0]) remove(it->path);
             list_remove(it);
         } else {
+            PVC_EV("upload_defer key=%s", it->key);
             any_deferred = true;           /* 留队列, 下轮再试 */
         }
         it = next;

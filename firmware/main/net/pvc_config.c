@@ -9,6 +9,8 @@
 #include "esp_log.h"
 #include "cJSON.h"
 
+#include "pvc_trace.h"
+
 static const char *TAG = "pvc_config";
 
 static void (*s_cb)(const pvc_config_t *cfg);
@@ -44,8 +46,8 @@ void pvc_config_handle_state(const struct cJSON *state)
     if (!cfg.id[0]) return;
 
     if (strcmp(cfg.id, pvc_store_last_cfg()) != 0) {
-        ESP_LOGI(TAG, "apply config %s: filter=%s play=%s beauty=%d sticker=%s",
-                 cfg.id, cfg.filter_id, cfg.play_type, cfg.beauty, cfg.sticker);
+        PVC_EV("config_recv id=%s filter=%s play=%s beauty=%d sticker=%s",
+               cfg.id, cfg.filter_id, cfg.play_type, cfg.beauty, cfg.sticker);
         if (s_cb) s_cb(&cfg);
         pvc_store_set_last_cfg(cfg.id);
     }
@@ -69,6 +71,7 @@ int pvc_config_process_ack(void)
     if (pvc_http_request(&req, &resp) != ESP_OK) return 0;   /* 网络错: 下轮重发 */
     if (resp.status == 401) return PVC_FEED_AUTH;
     if (resp.status >= 200 && resp.status < 300) {
+        PVC_EV("config_ack id=%s status=%d", s_ack_id, resp.status);
         s_ack_id[0] = '\0';
     } else {
         ESP_LOGW(TAG, "ack rejected (%d), dropping config_id=%s", resp.status, s_ack_id);
