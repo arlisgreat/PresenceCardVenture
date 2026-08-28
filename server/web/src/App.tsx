@@ -4,6 +4,7 @@ import { AiJob, DeviceConfig, FeedItem, Friend, FriendRequest, Message, PlayType
 import { acknowledgeDeviceConfig, queueDeviceConfig, type DeviceConfigSyncState } from './device-config'
 import { parseDeviceSession, serializeDeviceSession } from './device-session'
 import { buildInviteUrl, readInviteCode } from './invite'
+import { runAction } from './action-result'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -123,7 +124,8 @@ function App() {
   }
 
   async function onDelete(item: FeedItem) {
-    await deletePhoto(item.id)
+    const deleted = await runAction(() => deletePhoto(item.id), () => setToast('照片暂时无法移除，请再试一次'))
+    if (!deleted) return
     setFeed(current => current.filter(entry => entry.id !== item.id))
     setToast('照片已从你的足迹中移除')
   }
