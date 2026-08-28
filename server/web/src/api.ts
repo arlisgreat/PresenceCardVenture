@@ -186,14 +186,12 @@ export async function uploadDevicePhoto(payload: Blob, deviceToken: string, devi
 }
 
 export async function reactToPhoto(id: string, active: boolean): Promise<void> {
-  try {
-    if (active) await request(`/photos/${id}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'heart' }) })
-    else await request(`/photos/${id}/reactions/heart`, { method: 'DELETE' })
-  } catch { /* local fallback is handled by the view */ }
+  if (active) await request(`/photos/${id}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'heart' }) })
+  else await request(`/photos/${id}/reactions/heart`, { method: 'DELETE' })
 }
 
 export async function pokePhoto(id: string): Promise<void> {
-  try { await request(`/photos/${id}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'wow' }) }) } catch { /* the toast still gives local feedback */ }
+  await request(`/photos/${id}/reactions`, { method: 'POST', body: JSON.stringify({ type: 'wow' }) })
 }
 
 export async function deletePhoto(id: string): Promise<void> {

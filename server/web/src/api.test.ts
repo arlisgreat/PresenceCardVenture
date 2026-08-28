@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getPairStatus, publishAiJob, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, uploadDevicePhoto, uploadPhoto } from './api.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
   const originalFetch = globalThis.fetch
@@ -13,6 +13,17 @@ test('current user helper reads the authenticated profile and friend code', asyn
     const user = await getCurrentUser()
     assert.equal(user.friend_code, '100001')
     assert.deepEqual(request, { url: '/v1/me', authorization: 'Bearer demo-token' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('reaction helpers propagate service failures so the view can roll back optimistic state', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: { code: 'REACTION_UNAVAILABLE' } }), { status: 503 })) as typeof fetch
+  try {
+    await assert.rejects(() => reactToPhoto('p_1', true), /REACTION_UNAVAILABLE|Request failed: 503/)
+    await assert.rejects(() => pokePhoto('p_1'), /REACTION_UNAVAILABLE|Request failed: 503/)
   } finally {
     globalThis.fetch = originalFetch
   }

@@ -81,6 +81,7 @@ function App() {
   const [circle, setCircle] = useState('全部')
   const [toast, setToast] = useState('')
   const [heartBurst, setHeartBurst] = useState<string | null>(null)
+  const [pendingReactions, setPendingReactions] = useState<Set<string>>(new Set())
   const [deviceState, setDeviceState] = useState({ unseen_count: 3, pending_friend_requests: 1, server_time: '' })
   const [selectedConfig, setSelectedConfig] = useState<PlaySelection>({ filterId: 'none', playType: 'beauty', beauty: 42, sticker: 'none', name: '原色' })
 
@@ -91,14 +92,28 @@ function App() {
   const visibleFeed = useMemo(() => filterFeedByCircle(feed, circle), [circle, feed])
 
   async function onReact(item: FeedItem) {
+    const reactionKey = `${item.id}:heart`
+    if (pendingReactions.has(reactionKey)) return
     const active = !(item.my_reactions ?? []).includes('heart')
+    setPendingReactions(current => new Set(current).add(reactionKey))
     setFeed(current => current.map(entry => entry.id === item.id ? { ...entry, my_reactions: active ? ['heart'] : [], reactions: { ...entry.reactions, heart: Math.max(0, (entry.reactions.heart ?? 0) + (active ? 1 : -1)) } } : entry))
-    await reactToPhoto(item.id, active)
+    try {
+      await reactToPhoto(item.id, active)
+    } catch {
+      setFeed(current => current.map(entry => entry.id === item.id ? item : entry))
+      setToast('轻信号没有送达，请再试一次')
+    } finally {
+      setPendingReactions(current => { const next = new Set(current); next.delete(reactionKey); return next })
+    }
   }
 
-  function onPoke(item: FeedItem) {
-    void pokePhoto(item.id)
-    setToast(`${item.author.display_name} 收到一颗轻信号`)
+  async function onPoke(item: FeedItem) {
+    try {
+      await pokePhoto(item.id)
+      setToast(`${item.author.display_name} 收到一颗轻信号`)
+    } catch {
+      setToast('轻信号没有送达，请再试一次')
+    }
   }
 
   function onHeartBurst(item: FeedItem) {
