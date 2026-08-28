@@ -9,8 +9,9 @@ import { aiRoutes } from './routes/ai.js'
 import type { AiProvider } from './ai-provider.js'
 import { DemoSessionStore, type UserSessionStore } from './prisma-session-store.js'
 import type { DevicePairStore } from './prisma-device-store.js'
+import type { PhotoMetadataRepository } from './prisma-photo-repository.js'
 
-export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; authStore?: UserSessionStore; devicePairStore?: DevicePairStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
+export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; authStore?: UserSessionStore; devicePairStore?: DevicePairStore; photoMetadataRepository?: PhotoMetadataRepository; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
   const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const authStore = options.authStore ?? new DemoSessionStore(store); const files = options.photoStorage ?? new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
   const devicePairStore = options.devicePairStore
   const requireProductionServices = options.requireProductionServices ?? (process.env.REQUIRE_PRODUCTION_SERVICES === 'true' || process.env.NODE_ENV === 'production')
@@ -76,7 +77,7 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     if (idempotencyKey) { device.configIdempotencyKey = idempotencyKey; device.configResponse = response }
     return reply.code(202).send(response)
   })
-  app.register(async (scope)=>photoRoutes(scope,{store,files,devicePairStore}),{prefix:'/v1'}); app.register(async scope=>socialRoutes(scope,store),{prefix:'/v1'}); app.register(async scope=>aiRoutes(scope,store,options.aiProvider,files),{prefix:'/v1'})
+  app.register(async (scope)=>photoRoutes(scope,{store,files,devicePairStore,photoMetadataRepository: options.photoMetadataRepository}),{prefix:'/v1'}); app.register(async scope=>socialRoutes(scope,store),{prefix:'/v1'}); app.register(async scope=>aiRoutes(scope,store,options.aiProvider,files),{prefix:'/v1'})
   app.get('/v1/device/state', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const user=store.userForToken(token);const device=[...store.devices.values()].find(d=>d.token===token);const owner=user ?? (device?.userId ? store.user(device.userId) : undefined);if(!owner)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const pending_friend_requests=[...store.friendRequests.values()].filter(x=>x.status==='pending'&&x.addresseeId===owner.id).length;return {unseen_count:store.visiblePhotos(owner.id).length,pending_friend_requests,server_time:new Date().toISOString(),fw_latest:null,pending_config:device?.pendingConfig ?? null,active_config:device?.activeConfig ?? null}})
   app.post('/v1/device/heartbeat', async (r:any,reply)=>{const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,'');const d=[...store.devices.values()].find(x=>x.token===token);if(!d)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));d.lastSeen=new Date().toISOString();return reply.code(204).send()})
   app.post('/v1/device/ack', async (r:any, reply) => { const token=String(r.headers.authorization??'').replace(/^Bearer\s+/i,''); const device=[...store.devices.values()].find(d=>d.token===token); if(!device)return reply.code(401).send(errorBody('TOKEN_INVALID','device token required')); const configId=(r.body as any)?.config_id; if(configId && device.pendingConfig?.id===configId) { device.activeConfig=device.pendingConfig; device.pendingConfig=undefined } return reply.code(204).send() })

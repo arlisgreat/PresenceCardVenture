@@ -227,3 +227,20 @@ test('accepts a persistent device token for photo upload after pairing', async (
   assert.equal(response.json().photo_id.startsWith('p_'), true)
   await app.close()
 })
+
+test('dual-writes uploaded metadata through an injected photo repository', async () => {
+  const saved: any[] = []
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async (photo: any) => { saved.push(photo) },
+    findById: async () => undefined,
+    findByIdempotency: async () => undefined,
+    remove: async () => undefined,
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata-route', photoMetadataRepository })
+  const response = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'metadata-route-1', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  assert.equal(response.statusCode, 201)
+  assert.equal(saved.length, 1)
+  assert.match(saved[0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  await app.close()
+})

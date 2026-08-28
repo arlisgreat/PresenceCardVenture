@@ -34,6 +34,9 @@ test('Prisma schema covers web session and social/AI persistence contracts', asy
   const device = modelBlock(schema, 'Device')
   assert.match(device, /tokenHash\s+String\?/)
   assert.match(device, /tokenCiphertext\s+String\?/)
+  const idempotency = modelBlock(schema, 'IdempotencyKey')
+  assert.match(idempotency, /photoId\s+String/)
+  assert.match(idempotency, /photo\s+Photo/)
 })
 
 test('Prisma deployment assets include an initial migration and provider lock', async () => {

@@ -28,6 +28,7 @@
 - 生产启动时设置 `REQUIRE_PRODUCTION_SERVICES=true`（或 `NODE_ENV=production`），就绪探针会要求 `DATABASE_URL`、`OSS_BUCKET`（或 `OBJECT_STORAGE_BUCKET`）、非模拟的 `AI_PROVIDER`、`PERSISTENCE_PROVIDER=prisma` 和 `DEVICE_TOKEN_ENCRYPTION_KEY`，并检查运行时实际注入的 store、会话及设备适配器；缺项返回 `503`，避免误把 DemoStore 部署为生产服务。当前仓库的照片、社交、AI 主 store 仍未切 Prisma，即使配置齐全也会因 `PRISMA_STORE_ADAPTER` 缺失而阻断。
 - Web 会话解析已经通过 `UserSessionStore` 契约隔离：Demo 默认使用 `DemoSessionStore`，生产可注入 `PrismaSessionStore`。该适配器只用 bearer token 的 SHA-256 hash 查询 `Session`，并拒绝过期或撤销会话；生产 readiness 同时要求 `PRISMA_SESSION_ADAPTER`，避免主数据切换后认证仍落在 Demo 内存。
 - 设备配对持久化切片已接入可选的 `devicePairStore` 路由边界：`PrismaDeviceStore` 对短期配对码做过期校验，绑定时保存 token hash 与服务端密文，`/pair/status` 可在重启后解密恢复设备 token。生产启动需设置 `DEVICE_TOKEN_ENCRYPTION_KEY`；由于设备状态/玩法等主数据尚未迁移，`device_adapter.complete` 仍为 false，readiness 不会放行。
+- 照片元数据已提供 `PhotoMetadataRepository`/`PrismaPhotoRepository` 契约；注入时上传会用 UUID 写入 Prisma 元数据并先查设备幂等键，二进制仍由 `PhotoStorage` 管理。当前 Feed、删除和 AI 仍读取 DemoStore，repository 标记 `complete=false`，不会被误判为完整生产持久化。
 - Caddy 在 `APP_DOMAIN` 下将 `/v1/*` 同域反代到 API，并为 React Router 路径回退到 `index.html`；这样 Web 的相对 API 地址在开发和生产都保持一致。
 - Compose 的 `deploy/.env` 同时注入 API 与 PostgreSQL；容器内 `DATABASE_URL` 必须使用 `db` 主机名，不能照搬本机 `localhost` 配置。
 - Prisma 初始迁移已纳入 `server/api/prisma/migrations/0001_initial_schema/`，`docker compose exec api npx prisma migrate deploy` 现在有可执行的 schema 迁移；迁移完成不等于 API 已接入 Prisma store，`/health/ready` 仍会检查 adapter。

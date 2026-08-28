@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { DemoStore, errorBody } from '../demo-store.js'
 import type { PhotoStorage } from '../photo-store.js'
 import type { DevicePairStore } from '../prisma-device-store.js'
+import type { PhotoMetadataRepository } from '../prisma-photo-repository.js'
 
 const auth = async (r: FastifyRequest, store: DemoStore, devicePairStore?: DevicePairStore) => {
   const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
@@ -11,8 +12,8 @@ const auth = async (r: FastifyRequest, store: DemoStore, devicePairStore?: Devic
   const account = store.userForToken(token) ?? (device?.userId ? store.user(device.userId) : undefined) ?? persistentUser
   return { account, device }
 }
-export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStorage; devicePairStore?: DevicePairStore }) {
-  const { store, files, devicePairStore } = opts
+export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore; files: PhotoStorage; devicePairStore?: DevicePairStore; photoMetadataRepository?: PhotoMetadataRepository }) {
+  const { store, files, devicePairStore, photoMetadataRepository } = opts
   app.post('/photos', async (r, reply) => {
     const { account: u, device } = await auth(r, store, devicePairStore); if (!u) return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'))
     const body = r.body as Buffer; if (!Buffer.isBuffer(body)) return reply.code(415).send(errorBody('BAD_CONTENT_TYPE','JPEG required'))
@@ -21,6 +22,8 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const idem = String(r.headers['idempotency-key'] ?? ''); if (!idem) return reply.code(400).send(errorBody('BAD_REQUEST','Idempotency-Key required'))
     const deviceId = String(r.headers['x-device-id'] ?? 'web')
     if (device && device.id !== deviceId) return reply.code(403).send(errorBody('FORBIDDEN', 'device token does not match device id'))
+    const persistedExisting = photoMetadataRepository ? await photoMetadataRepository.findByIdempotency(u.id, deviceId, idem) : undefined
+    if (persistedExisting) return reply.code(200).send(uploadResult(persistedExisting, store))
     const existing = [...store.photos.values()].find(p => p.authorId === u.id && p.idempotencyKey === idem && p.deviceId === deviceId)
     if (existing) return reply.code(200).send(uploadResult(existing, store))
     const usedToday = store.dailyUploadCount(u.id, deviceId)
@@ -43,8 +46,11 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192) return reply.code(400).send(errorBody('BAD_REQUEST', 'width and height must be integers from 1 to 8192'))
     const beauty = Number(r.headers['x-beauty'] ?? 0)
     if (!Number.isFinite(beauty) || beauty < 0 || beauty > 100) return reply.code(400).send(errorBody('BAD_REQUEST', 'beauty must be between 0 and 100'))
-    const id = `p_${randomUUID()}`; const p = { id, authorId: u.id, filterId: String(r.headers['x-filter-id'] ?? 'none'), playType: String(r.headers['x-play-type'] ?? 'ccd'), beauty, sticker: String(r.headers['x-sticker'] ?? 'none'), caption, circle, width, height, createdAt: new Date().toISOString(), original: body, processed: body, idempotencyKey: idem, deviceId }
+    const id = photoMetadataRepository ? randomUUID() : `p_${randomUUID()}`; const p = { id, authorId: u.id, filterId: String(r.headers['x-filter-id'] ?? 'none'), playType: String(r.headers['x-play-type'] ?? 'ccd'), beauty, sticker: String(r.headers['x-sticker'] ?? 'none'), caption, circle, width, height, createdAt: new Date().toISOString(), original: body, processed: body, idempotencyKey: idem, deviceId }
     try { await files.save(p) } catch { return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable')) }
+    if (photoMetadataRepository) {
+      try { await photoMetadataRepository.create(p) } catch { await files.remove(p).catch(() => undefined); return reply.code(503).send(errorBody('PERSISTENCE_UNAVAILABLE', 'photo metadata unavailable')) }
+    }
     store.photos.set(id, p)
     return reply.code(201).send(uploadResult(p, store))
   })

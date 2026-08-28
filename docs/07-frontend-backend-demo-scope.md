@@ -92,6 +92,7 @@
 - 生产持久化门禁：`/health/ready` 在生产模式额外要求 `PERSISTENCE_PROVIDER=prisma` 且运行时必须注入真正的 Prisma store adapter；当前 API 尚未把 Prisma store adapter 接入路由，即使环境变量齐全也会因 `PRISMA_STORE_ADAPTER` 返回 `503`，避免将 `DemoStore` 误切到生产。
 - 会话持久化切片：`PrismaSessionStore` 已实现并接入 `/v1/me`，使用 token hash 查询并校验 `expiresAt`/`revokedAt`；生产 readiness 额外检查 `PRISMA_SESSION_ADAPTER`。照片、社交、设备和 AI 仍未迁移，因此即使会话适配器已注入，整体生产 readiness 仍保持阻断。
 - 设备持久化切片：`PrismaDeviceStore` 已接入可选配对路由，使用 token hash + `DEVICE_TOKEN_ENCRYPTION_KEY` 加密密文支持 `/pair/status` 恢复 token；照片上传可用持久化 device token 认证，但设备状态/玩法仍是 DemoStore，因此 `device_adapter.complete=false`，生产 readiness 继续检查 `PRISMA_DEVICE_ADAPTER` 与 `DEVICE_TOKEN_ENCRYPTION_KEY`。
+- 照片元数据切片：`PrismaPhotoRepository` 已完成 UUID/OSS key/玩法元数据/幂等索引映射，并接入上传双写边界；Feed、删除和 AI 结果仍待切换到 repository，当前不宣称生产可用。
 - Prisma schema parity：schema 已覆盖 Web 会话、照片玩法元数据、消息和 AI 任务，并提供 `0001_initial_schema` 初始迁移与 PostgreSQL migration lock；这为下一轮 adapter 接入提供数据库基础，但当前不宣称已完成数据读写切换。
 
 ## 待确认问题
