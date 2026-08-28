@@ -32,9 +32,15 @@ export class DemoStore {
     this.friendships.add(`${u1.id}:${u2.id}`); this.friendships.add(`${u2.id}:${u1.id}`)
     this.friendships.add(`${u1.id}:${u3.id}`); this.friendships.add(`${u3.id}:${u1.id}`)
     const now = Date.now()
-    for (const [i, authorId] of [[1, u2.id], [2, u1.id], [3, u3.id], [4, u1.id]] as const) {
-      const id = `p_demo_${i}`; const jpeg = DEMO_JPEG
-      this.photos.set(id, { id, authorId, filterId: i === 1 ? 'warm' : 'none', caption: `Demo photo ${i}`, circle: i === 1 ? '傍晚的天空' : '小圈', width: 320, height: 240, createdAt: new Date(now - i * 60000).toISOString(), original: jpeg, processed: jpeg })
+    const seeds = [
+      { authorId: u2.id, filterId: 'warm', playType: 'ccd', caption: '傍晚的风从窗台进来。', circle: '傍晚的天空' },
+      { authorId: u1.id, filterId: 'none', playType: 'beauty', caption: '把今天折成一张小卡。', circle: '小圈' },
+      { authorId: u3.id, filterId: 'film', playType: 'ccd', caption: '今天也有好好在场。', circle: '宿舍窗台' },
+      { authorId: u1.id, filterId: 'vivid', playType: 'ccd', caption: '留一点颗粒给下一次见面。', circle: '小圈' },
+    ] as const
+    for (const [index, seed] of seeds.entries()) {
+      const id = `p_demo_${index + 1}`; const jpeg = DEMO_JPEG
+      this.photos.set(id, { id, ...seed, beauty: seed.playType === 'beauty' ? 42 : 0, sticker: 'none', width: 320, height: 240, createdAt: new Date(now - (index + 1) * 60000).toISOString(), original: jpeg, processed: jpeg })
     }
   }
   userForToken(token?: string) { return token ? this.users.get(this.tokens.get(token) ?? '') : undefined }
