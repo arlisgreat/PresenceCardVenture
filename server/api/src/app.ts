@@ -7,9 +7,10 @@ import { photoRoutes } from './routes/photos.js'
 import { socialRoutes } from './routes/social.js'
 import { aiRoutes } from './routes/ai.js'
 import type { AiProvider } from './ai-provider.js'
+import { DemoSessionStore, type UserSessionStore } from './prisma-session-store.js'
 
-export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
-  const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const files = options.photoStorage ?? new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
+export async function buildApp(options: { uploadsDir?: string; store?: DemoStore; authStore?: UserSessionStore; uploadDailyLimit?: number; requireProductionServices?: boolean; aiProvider?: AiProvider; photoStorage?: PhotoStorage } = {}): Promise<FastifyInstance> {
+  const store = options.store ?? new DemoStore({ uploadDailyLimit: options.uploadDailyLimit }); const authStore = options.authStore ?? new DemoSessionStore(store); const files = options.photoStorage ?? new PhotoStore(options.uploadsDir ?? path.resolve('uploads'))
   const requireProductionServices = options.requireProductionServices ?? (process.env.REQUIRE_PRODUCTION_SERVICES === 'true' || process.env.NODE_ENV === 'production')
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 })
   app.addHook('onRequest', async (request, reply) => {
@@ -27,20 +28,22 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     const aiProvider = String(process.env.AI_PROVIDER ?? '').trim().toLowerCase()
     const persistenceProvider = String(process.env.PERSISTENCE_PROVIDER ?? '').trim().toLowerCase()
     const persistenceAdapter = String((store as DemoStore & { provider?: string }).provider ?? '').trim().toLowerCase()
+    const sessionAdapter = String(authStore.provider ?? '').trim().toLowerCase()
     const checks = {
       database: Boolean(process.env.DATABASE_URL),
       object_storage: Boolean(process.env.OSS_BUCKET || process.env.OBJECT_STORAGE_BUCKET),
       ai_provider: Boolean(aiProvider && !['demo', 'local', 'simulator'].includes(aiProvider)),
       persistence_provider: persistenceProvider === 'prisma',
       persistence_adapter: persistenceProvider === 'prisma' && persistenceAdapter === 'prisma',
+      session_adapter: persistenceProvider === 'prisma' && sessionAdapter === 'prisma',
     }
-    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : name === 'persistence_provider' ? 'PERSISTENCE_PROVIDER' : name === 'persistence_adapter' ? 'PRISMA_STORE_ADAPTER' : 'DATABASE_URL')
+    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name === 'object_storage' ? 'OSS_BUCKET' : name === 'ai_provider' ? 'AI_PROVIDER' : name === 'persistence_provider' ? 'PERSISTENCE_PROVIDER' : name === 'persistence_adapter' ? 'PRISMA_STORE_ADAPTER' : name === 'session_adapter' ? 'PRISMA_SESSION_ADAPTER' : 'DATABASE_URL')
     const ready = !requireProductionServices || missing.length === 0
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ready' : 'blocked', mode: requireProductionServices ? 'production' : 'demo', checks, missing })
   })
   app.get('/v1/me', async (r: any, reply) => {
     const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
-    const user = store.userForToken(token)
+    const user = await authStore.userForToken(token)
     if (!user) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
     return { id: user.id, username: user.username, display_name: user.displayName, friend_code: user.friendCode }
   })

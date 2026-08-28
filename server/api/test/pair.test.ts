@@ -37,7 +37,9 @@ test('production readiness stays blocked when Prisma is configured without a Pri
     const blocked = await production.inject({ method: 'GET', url: '/health/ready' })
     assert.equal(blocked.statusCode, 503)
     assert.equal(blocked.json().checks.persistence_adapter, false)
+    assert.equal(blocked.json().checks.session_adapter, false)
     assert.ok(blocked.json().missing.includes('PRISMA_STORE_ADAPTER'))
+    assert.ok(blocked.json().missing.includes('PRISMA_SESSION_ADAPTER'))
     await production.close()
   } finally {
     if (previous.database === undefined) delete process.env.DATABASE_URL
