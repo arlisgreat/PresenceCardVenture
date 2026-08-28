@@ -42,6 +42,7 @@ typedef struct {
 } react_req_t;
 static react_req_t s_reacts[4];
 static int s_react_n;
+static int s_new_likes;    /* poll 检测到的本人照片新增被赞 (仅 net 任务读写) */
 
 static void lock_init(void)
 {
@@ -253,17 +254,24 @@ int pvc_feed_poll(void)
                       cJSON_GetObjectItem(it, "caption"));
         copy_json_str(s->meta.filter, sizeof(s->meta.filter),
                       cJSON_GetObjectItem(it, "filter_id"));
+        const cJSON *jre = cJSON_GetObjectItem(it, "reactions");
+        const cJSON *jh = jre ? cJSON_GetObjectItem(jre, "heart") : NULL;
+        s->meta.hearts = cJSON_IsNumber(jh) ? (uint16_t)jh->valueint : 0;
+        s->meta.mine = cJSON_IsTrue(cJSON_GetObjectItem(it, "mine"));
 
-        /* 命中现有缓存: 转移 JPEG 所有权 */
+        /* 命中现有缓存: 转移 JPEG 所有权; 顺带检测本人照片新增被赞 */
         xSemaphoreTake(s_lock, portMAX_DELAY);
         for (int k = 0; k < s_count; k++) {
-            if (s_slots[k].jpg &&
-                strcmp(s_slots[k].meta.photo_id, s->meta.photo_id) == 0) {
+            if (strcmp(s_slots[k].meta.photo_id, s->meta.photo_id) != 0) continue;
+            if (s->meta.mine && s->meta.hearts > s_slots[k].meta.hearts) {
+                s_new_likes += s->meta.hearts - s_slots[k].meta.hearts;
+            }
+            if (s_slots[k].jpg) {
                 s->jpg = s_slots[k].jpg;
                 s->len = s_slots[k].len;
                 s_slots[k].jpg = NULL;
-                break;
             }
+            break;
         }
         xSemaphoreGive(s_lock);
 
@@ -304,9 +312,17 @@ int pvc_feed_poll(void)
     cJSON_Delete(j);
 
     sd_sync_index();
+    if (s_new_likes) PVC_EV("likes new=%d", s_new_likes);
     PVC_EV("feed_poll unseen=%d items=%d new=%d complete=%d",
            unseen, n_ok, n_new, (int)(n_ok == n_items));
     return n_new;
+}
+
+int pvc_feed_take_new_likes(void)
+{
+    int n = s_new_likes;
+    s_new_likes = 0;
+    return n;
 }
 
 /* ---------------- 读取 (任意任务) ---------------- */

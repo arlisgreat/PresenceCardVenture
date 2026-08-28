@@ -31,6 +31,7 @@ typedef struct up_item {
     char     key[64];       /* Idempotency-Key */
     char     filter[16];
     int      beauty;        /* X-Beauty 0-100 (重启恢复条目为 0) */
+    char     caption[96];   /* UTF-8 原文; 发送时 URL-encode (重启恢复为空) */
 } up_item_t;
 
 static up_item_t *s_head;
@@ -98,7 +99,8 @@ void pvc_upload_init(void)
 }
 
 esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
-                             const char *filter_id, int beauty)
+                             const char *filter_id, int beauty,
+                             const char *caption)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
 
@@ -111,6 +113,7 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
              pvc_store_device_id(), (unsigned long)boot, (unsigned long)seq);
     strncpy(it->filter, filter_id, sizeof(it->filter) - 1);
     it->beauty = (beauty < 0) ? 0 : (beauty > 100 ? 100 : beauty);
+    if (caption) strncpy(it->caption, caption, sizeof(it->caption) - 1);
 
     /* 优先落盘 (断电不丢) */
     mkdir(QUEUE_DIR, 0755);
@@ -181,25 +184,48 @@ static uint8_t *item_load(up_item_t *it, size_t *len, bool *from_file)
     return buf;
 }
 
+/* RFC3986 百分号编码 (X-Caption 要求 URL-encode 的 UTF-8, §2) */
+static void url_encode(const char *src, char *dst, size_t cap)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const uint8_t *p = (const uint8_t *)src; *p && o + 4 < cap; p++) {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+            (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' ||
+            *p == '.' || *p == '~') {
+            dst[o++] = (char)*p;
+        } else {
+            dst[o++] = '%';
+            dst[o++] = hex[*p >> 4];
+            dst[o++] = hex[*p & 0x0F];
+        }
+    }
+    dst[o] = '\0';
+}
+
 /* 发送一个条目一次。返回 HTTP 状态码 (传输层失败返回 -1)。 */
 static int item_post(up_item_t *it, const uint8_t *jpg, size_t len, char *rbuf, size_t rcap)
 {
-    char beauty_s[8];
+    char beauty_s[8], cap_enc[288];
     snprintf(beauty_s, sizeof(beauty_s), "%d", it->beauty);
-    pvc_hdr_t hdrs[] = {
-        { "Idempotency-Key", it->key },
-        /* server 校验 X-Device-Id 必须与 token 绑定的设备一致, 缺失即 403 */
-        { "X-Device-Id",     pvc_store_device_id() },
-        { "X-Filter-Id",     it->filter },
-        { "X-Beauty",        beauty_s },
-        { "X-Width",         PHOTO_W },
-        { "X-Height",        PHOTO_H },
-    };
+    pvc_hdr_t hdrs[8];
+    int nh = 0;
+    hdrs[nh++] = (pvc_hdr_t){ "Idempotency-Key", it->key };
+    /* server 校验 X-Device-Id 必须与 token 绑定的设备一致, 缺失即 403 */
+    hdrs[nh++] = (pvc_hdr_t){ "X-Device-Id",     pvc_store_device_id() };
+    hdrs[nh++] = (pvc_hdr_t){ "X-Filter-Id",     it->filter };
+    hdrs[nh++] = (pvc_hdr_t){ "X-Beauty",        beauty_s };
+    hdrs[nh++] = (pvc_hdr_t){ "X-Width",         PHOTO_W };
+    hdrs[nh++] = (pvc_hdr_t){ "X-Height",        PHOTO_H };
+    if (it->caption[0]) {
+        url_encode(it->caption, cap_enc, sizeof(cap_enc));
+        hdrs[nh++] = (pvc_hdr_t){ "X-Caption", cap_enc };
+    }
     pvc_http_req_t req = {
         .method = "POST", .path = "/photos", .auth = true,
         .content_type = "image/jpeg",
         .body = jpg, .body_len = len,
-        .headers = hdrs, .n_headers = sizeof(hdrs) / sizeof(hdrs[0]),
+        .headers = hdrs, .n_headers = nh,
         .timeout_ms = 30000,           /* 上传体较大, 放宽 */
     };
     pvc_http_resp_t resp = { .buf = rbuf, .cap = rcap };

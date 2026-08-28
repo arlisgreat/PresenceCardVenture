@@ -38,6 +38,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -53,6 +54,7 @@
 #include "pvc_store.h"      /* boot 计数: 相册文件名跨重启唯一 */
 #include "pvc_clock.h"
 #include "pvc_jpeg.h"
+#include "pvc_sound.h"
 #include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
@@ -91,6 +93,10 @@ static void on_filter_long_press(lv_event_t *e);
 static void on_beauty_card_click(lv_event_t *e);
 static void open_feed(void);
 static void render_feed(void);
+static void do_like(void);
+static void spawn_like_float(int count);
+static void open_caption_panel(void);
+static lv_obj_t *panel_create(uint32_t h);
 
 /* ================= 状态 ================= */
 static lv_obj_t   *s_canvas;               /* 全屏预览画布 */
@@ -419,6 +425,11 @@ static uint16_t *s_wk_qvga;                     /* FRAME_BYTES */
 static uint8_t  *s_wk_enc;                      /* 编码输出 */
 #define WK_ENC_CAP (320 * 1024)
 
+/* ---- 预设配文信箱: 快门后弹 4 短语面板, worker 在上传前最多等 6s ----
+ * 连拍时配文归属最近一次快门; 前一张若未及选择则不配文 (刻意从简)。 */
+static SemaphoreHandle_t s_caption_sem;
+static char s_caption_sel[96];
+
 static void photo_worker(void *arg)
 {
     (void)arg;
@@ -481,10 +492,19 @@ static void photo_worker(void *arg)
                scale_ms, encode_ms, (unsigned)jlen);
 
         if (jlen && jlen <= 100 * 1024) {
+            /* 等预设配文 (至快门后 6s 截止; 未选/超时 = 不配文) */
+            char caption[96] = "";
+            int wait_ms = 6000 -
+                (int)((esp_timer_get_time() - job.t_shutter) / 1000);
+            if (s_caption_sem && wait_ms > 0 &&
+                xSemaphoreTake(s_caption_sem, pdMS_TO_TICKS(wait_ms)) == pdTRUE) {
+                strncpy(caption, s_caption_sel, sizeof(caption) - 1);
+            }
+            PVC_EV("caption used=%d", (int)(caption[0] != 0));
             PVC_EV("photo_encoded bytes=%u filter=%s beauty=%d",
                    (unsigned)jlen, k_filter_api_id[job.fid], job.white);
             pvc_net_enqueue_photo(s_wk_enc, jlen, k_filter_api_id[job.fid],
-                                  job.white);   /* enqueue 内部拷贝/落盘 */
+                                  job.white, caption);  /* enqueue 内部拷贝 */
         } else {
             ESP_LOGE(TAG, "jpeg encode failed or oversize");
         }
@@ -562,6 +582,58 @@ static void take_photo(void)
     }
     s_seq++;
     /* 磨皮/滤镜/存卡/编码/上传由 core1 worker 异步完成, 预览立即恢复 */
+}
+
+/* ================= 预设配文面板 (拍后 6s 内可选) ================= */
+static lv_obj_t *s_caption_panel_obj;
+
+static void caption_timeout_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);
+    if (s_panel && s_panel == s_caption_panel_obj) close_panel();
+    s_caption_panel_obj = NULL;
+}
+
+static void on_caption_click(lv_event_t *e)
+{
+    static const char *const k_phrases[] = {
+        "想你了", "今天也在场", "分你一朵云", "晚点见"
+    };
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx >= 0 && idx < 4) {
+        strncpy(s_caption_sel, k_phrases[idx], sizeof(s_caption_sel) - 1);
+        PVC_EV("caption sel=%d", idx);
+        if (s_caption_sem) xSemaphoreGive(s_caption_sem);
+    }
+    s_caption_panel_obj = NULL;
+    close_panel();
+}
+
+static void open_caption_panel(void)
+{
+    static const char *const k_phrases[] = {
+        "想你了", "今天也在场", "分你一朵云", "晚点见"
+    };
+    if (s_caption_sem) xSemaphoreTake(s_caption_sem, 0);   /* 清残留 */
+    s_caption_sel[0] = '\0';
+
+    lv_obj_t *p = panel_create(56);
+    s_caption_panel_obj = p;
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *b = lv_btn_create(p);
+        lv_obj_set_size(b, 74, 40);
+        lv_obj_set_pos(b, 4 + i * 78, 8);
+        lv_obj_set_style_bg_color(b, lv_color_make(0x2f, 0x36, 0x45), 0);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_set_style_shadow_width(b, 0, 0);
+        lv_obj_add_event_cb(b, on_caption_click, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, k_phrases[i]);
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        lv_obj_center(l);
+    }
+    lv_timer_create(caption_timeout_cb, 6000, NULL);
 }
 
 /* ================= 面板控制 ================= */
@@ -839,6 +911,32 @@ static void on_view_back_cb(lv_event_t *e)
     }
 }
 
+/* ================= 点赞反馈 (飘字动画 + 音效) ================= */
+static void like_anim_y(void *var, int32_t v)
+{
+    lv_obj_set_y((lv_obj_t *)var, v);
+}
+
+static void spawn_like_float(int count)
+{
+    if (count > 3) count = 3;
+    for (int i = 0; i < count; i++) {
+        lv_obj_t *l = lv_label_create(lv_scr_act());
+        lv_label_set_text(l, "+1 赞");
+        lv_obj_set_style_text_color(l, lv_color_make(0xE8, 0x4A, 0x6A), 0);
+        lv_obj_set_pos(l, 136 + i * 26, 190);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, l);
+        lv_anim_set_exec_cb(&a, like_anim_y);
+        lv_anim_set_values(&a, 190, 70);
+        lv_anim_set_duration(&a, 1200);
+        lv_anim_set_delay(&a, (uint32_t)i * 150);
+        lv_anim_start(&a);
+        lv_obj_delete_delayed(l, 1700 + (uint32_t)i * 150);
+    }
+}
+
 /* ================= 好友 feed 浏览 (规范 §3) ================= */
 static lv_obj_t *s_feed_panel = NULL;
 static lv_obj_t *s_feed_canvas = NULL;
@@ -846,6 +944,8 @@ static uint16_t *s_feed_buf = NULL;           /* 320x240 RGB565 (PSRAM) */
 static lv_obj_t *s_feed_author, *s_feed_caption, *s_feed_counter;
 static pvc_feed_item_t s_feed_items[PVC_FEED_MAX];
 static int s_feed_n = 0, s_feed_idx = 0;
+static bool s_feed_auto = false;          /* 到达仪式自动展示中 (交互即取消) */
+static lv_timer_t *s_arrival_timer = NULL;
 
 /* 快速解析 JPEG SOF 尺寸 (防止非 320x240 图解码溢出缓冲) */
 static bool jpeg_dims(const uint8_t *jpg, size_t len, uint32_t *w, uint32_t *h)
@@ -912,6 +1012,7 @@ static void render_feed(void)
 
 static void open_feed(void)
 {
+    s_feed_auto = false;
     close_panel();
     s_feed_n = pvc_feed_snapshot(s_feed_items, PVC_FEED_MAX);
     pvc_net_signal_feed();                 /* 顺手触发一次刷新 */
@@ -928,12 +1029,14 @@ static void open_feed(void)
 static void on_feed_back(lv_event_t *e)
 {
     (void)e;
+    s_feed_auto = false;
     lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void on_feed_prev(lv_event_t *e)
 {
     (void)e;
+    s_feed_auto = false;
     if (s_feed_n == 0) return;
     s_feed_idx = (s_feed_idx + s_feed_n - 1) % s_feed_n;
     render_feed();
@@ -942,18 +1045,42 @@ static void on_feed_prev(lv_event_t *e)
 static void on_feed_next(lv_event_t *e)
 {
     (void)e;
+    s_feed_auto = false;
     if (s_feed_n == 0) return;
     s_feed_idx = (s_feed_idx + 1) % s_feed_n;
     render_feed();
 }
 
-static void on_feed_heart(lv_event_t *e)
+static void do_like(void)
 {
-    (void)e;
     if (s_feed_n == 0) return;
     pvc_feed_react_async(s_feed_items[s_feed_idx].photo_id, "heart");
     pvc_net_signal_feed();
-    toast_show("已点赞");
+    pvc_sound_play(PVC_SND_LIKE);
+    spawn_like_float(1);
+}
+
+static void on_feed_heart(lv_event_t *e)
+{
+    (void)e;
+    s_feed_auto = false;
+    do_like();
+}
+
+/* 双击照片点赞 (400ms 内两次点击) */
+static void on_feed_canvas_click(lv_event_t *e)
+{
+    (void)e;
+    s_feed_auto = false;
+    static uint32_t s_last_ms;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now - s_last_ms < 400) {
+        s_last_ms = 0;
+        PVC_EV("like via=double_tap");
+        do_like();
+    } else {
+        s_last_ms = now;
+    }
 }
 
 /* pvc_config 回调 (联网任务): 应用 web 下发的配置 */
@@ -983,17 +1110,48 @@ void ui_apply_remote_config(const pvc_config_t *cfg)
     bsp_display_unlock();
 }
 
-/* pvc_net 回调 (联网任务): feed 有更新 */
-void ui_net_feed_updated(int total, int fresh)
+/* 到达仪式自动展示的收起定时器 (3s; 期间用户交互则保留页面) */
+static void arrival_hide_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);
+    s_arrival_timer = NULL;
+    if (s_feed_auto && s_feed_panel) {
+        lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_feed_auto = false;
+}
+
+/* pvc_net 回调 (联网任务): feed 有更新 / 本人照片被赞 */
+void ui_net_feed_updated(int total, int fresh, int new_likes)
 {
     if (!bsp_display_lock(1000)) return;
+
+    if (new_likes > 0) {                  /* 被赞: 飘字 + 音效 */
+        pvc_sound_play(PVC_SND_LIKE);
+        spawn_like_float(new_likes);
+    }
+
     if (fresh > 0) {
+        /* 到达仪式: 亮屏 + 提示音 + 自动展示最新一张 3s (docs T17) */
+        pvc_sound_play(PVC_SND_DING);
+        bsp_display_backlight_on();
+        lv_display_trigger_activity(NULL);   /* 重置省电空闲计时 */
+        s_feed_n = pvc_feed_snapshot(s_feed_items, PVC_FEED_MAX);
+        PVC_EV("arrival fresh=%d shown=%d", fresh, (int)(s_feed_n > 0));
+        if (s_feed_n > 0 && s_feed_panel && s_feed_buf) {
+            s_feed_idx = 0;
+            s_feed_auto = true;
+            lv_obj_clear_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_feed_panel);
+            render_feed();
+            if (s_arrival_timer) lv_timer_del(s_arrival_timer);
+            s_arrival_timer = lv_timer_create(arrival_hide_cb, 3000, NULL);
+        }
         char msg[32];
         snprintf(msg, sizeof(msg), "新照片 +%d", fresh);
         toast_show(msg);
-    }
-    /* 浏览页开着时就地刷新 */
-    if (s_feed_panel && !lv_obj_has_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN)) {
+    } else if (s_feed_panel && !lv_obj_has_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN)) {
+        /* 浏览页开着时就地刷新 */
         s_feed_n = pvc_feed_snapshot(s_feed_items, PVC_FEED_MAX);
         if (s_feed_n == 0) {
             lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
@@ -1309,6 +1467,9 @@ void ui_beauty_camera_create(void)
                              LV_COLOR_FORMAT_RGB565);
         lv_obj_set_pos(s_feed_canvas, 0, 0);
         lv_obj_set_style_bg_opa(s_feed_canvas, LV_OPA_TRANSP, 0);
+        lv_obj_add_flag(s_feed_canvas, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_feed_canvas, on_feed_canvas_click,
+                            LV_EVENT_CLICKED, NULL);
     }
 
     /* 底部信息条: 作者 + 配文 + 计数 */
@@ -1375,6 +1536,8 @@ void ui_beauty_camera_create(void)
 
     /* 拍照后处理 worker: core1, 快门不阻塞预览; 队列深 2, 满则拒拍。
      * 缓冲全部预分配 (快照池 3x600KB + work/qvga/enc), 拍照路径零 malloc */
+    pvc_sound_init();
+    if (!s_caption_sem) s_caption_sem = xSemaphoreCreateBinary();
     for (int i = 0; i < SNAP_POOL_N; i++) s_snap_pool[i] = PSRAM_MALLOC(CAP_BYTES);
     s_wk_work = PSRAM_MALLOC(CAP_BYTES);
     s_wk_qvga = PSRAM_MALLOC(FRAME_BYTES);
@@ -1415,18 +1578,32 @@ void ui_net_show_pair(const char *code)
     lv_obj_align(t, LV_ALIGN_CENTER, 0, -50);
     lv_obj_set_style_text_color(t, lv_color_make(0x8a, 0x93, 0xa5), 0);
 
-    /* 配对码大号展示 (默认字体, 拉大字距提高可读性) */
+    /* 配对码大号展示 (左) + 扫码直达 (右) */
     lv_obj_t *c = lv_label_create(s_pair_panel);
     lv_label_set_text(c, code);
-    lv_obj_align(c, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_align(c, LV_ALIGN_CENTER, -80, -10);
     lv_obj_set_style_text_color(c, lv_color_white(), 0);
     lv_obj_set_style_text_letter_space(c, 8, 0);
     lv_obj_set_style_text_font(c, &lv_font_montserrat_14, 0);
 
+    char qrbuf[160];
+    if (PVC_WEB_BASE[0]) {
+        snprintf(qrbuf, sizeof(qrbuf), "%s/pair?code=%s&device_id=%s",
+                 PVC_WEB_BASE, code, pvc_store_device_id());
+    } else {
+        snprintf(qrbuf, sizeof(qrbuf), "PVC-PAIR:%s", code);
+    }
+    lv_obj_t *qr = lv_qrcode_create(s_pair_panel);
+    lv_qrcode_set_size(qr, 96);
+    lv_qrcode_set_dark_color(qr, lv_color_black());
+    lv_qrcode_set_light_color(qr, lv_color_white());
+    lv_qrcode_update(qr, qrbuf, (uint32_t)strlen(qrbuf));
+    lv_obj_align(qr, LV_ALIGN_CENTER, 70, -12);
+
     lv_obj_t *h = lv_label_create(s_pair_panel);
     lv_label_set_text(h, "Enter this code on the web\nto bind the device");
     lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(h, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, 55);
     lv_obj_set_style_text_color(h, lv_color_make(0x8a, 0x93, 0xa5), 0);
     bsp_display_unlock();
 }
@@ -1457,20 +1634,32 @@ void ui_net_show_prov(const char *ble_name, const char *pop)
     lv_obj_t *n = lv_label_create(s_pair_panel);
     snprintf(line, sizeof(line), "Device: %s", ble_name);
     lv_label_set_text(n, line);
-    lv_obj_align(n, LV_ALIGN_CENTER, 0, -22);
+    lv_obj_align(n, LV_ALIGN_CENTER, -80, -30);
     lv_obj_set_style_text_color(n, lv_color_white(), 0);
 
     lv_obj_t *p = lv_label_create(s_pair_panel);
     snprintf(line, sizeof(line), "POP: %s", pop);
     lv_label_set_text(p, line);
-    lv_obj_align(p, LV_ALIGN_CENTER, 0, 4);
+    lv_obj_align(p, LV_ALIGN_CENTER, -80, -6);
     lv_obj_set_style_text_color(p, lv_color_white(), 0);
     lv_obj_set_style_text_letter_space(p, 3, 0);
 
+    /* 标准配网 QR: ESP BLE Provisioning App 扫码直连, 免手输 */
+    char qrbuf[200];
+    snprintf(qrbuf, sizeof(qrbuf),
+             "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"%s\",\"transport\":\"ble\"}",
+             ble_name, pop);
+    lv_obj_t *qr = lv_qrcode_create(s_pair_panel);
+    lv_qrcode_set_size(qr, 110);
+    lv_qrcode_set_dark_color(qr, lv_color_black());
+    lv_qrcode_set_light_color(qr, lv_color_white());
+    lv_qrcode_update(qr, qrbuf, (uint32_t)strlen(qrbuf));
+    lv_obj_align(qr, LV_ALIGN_CENTER, 75, -12);
+
     lv_obj_t *h = lv_label_create(s_pair_panel);
-    lv_label_set_text(h, "Open \"ESP BLE Provisioning\" app\nselect device, enter POP,\nthen send your Wi-Fi");
+    lv_label_set_text(h, "Scan with \"ESP BLE Provisioning\"\napp, or select device & enter POP");
     lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(h, LV_ALIGN_CENTER, 0, 52);
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, 62);
     lv_obj_set_style_text_color(h, lv_color_make(0x8a, 0x93, 0xa5), 0);
     bsp_display_unlock();
 }

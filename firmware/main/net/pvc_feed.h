@@ -10,6 +10,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -25,6 +26,8 @@ typedef struct {
     char author[24];       /* display_name (UTF-8, 截断安全) */
     char caption[96];
     char filter[16];
+    uint16_t hearts;       /* reactions.heart 计数 */
+    bool mine;             /* 是否本人照片 (被赞检测用) */
 } pvc_feed_item_t;
 
 /* poll 返回值: >=0 = 本次新增张数; 负值为错误 */
@@ -48,6 +51,9 @@ void pvc_feed_react_async(const char *photo_id, const char *type);
 
 /* 联网任务调用: 发送积压的反应; 返回 PVC_FEED_AUTH 表示 401 */
 int pvc_feed_process_reactions(void);
+
+/* 取走上次 poll 检测到的"我的照片新增被赞数"(读后清零) */
+int pvc_feed_take_new_likes(void);
 
 #ifdef __cplusplus
 }

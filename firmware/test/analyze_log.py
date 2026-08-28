@@ -335,6 +335,22 @@ def run_checks(ev, http, sleeps, boots, panics):
     else:
         r.add("C17", "SKIP", "无 stack 水位事件")
 
+    # C18 UX 事件统计 (信息项: 仪式感/配文/点赞链路是否活跃)
+    ux = {
+        "sound": len(evs("sound")), "arrival": len(evs("arrival")),
+        "caption_sel": len(evs("caption")),
+        "likes_recv": sum(int(d.get("new", 0)) for d in evs("likes")),
+        "double_tap": len(evs("like")),
+    }
+    if any(ux.values()):
+        r.add("C18", "INFO", "UX 事件: " + " ".join(f"{k}={v}" for k, v in ux.items()))
+    # 到达仪式核对: arrival 必须伴随 ding (sound id=1)
+    arr = evs("arrival")
+    if arr:
+        dings = [d for d in evs("sound") if d.get("id") == "1"]
+        if len(dings) < len(arr):
+            r.add("C18a", "WARN", f"到达 {len(arr)} 次但 ding 音仅 {len(dings)} 次 (喇叭失效?)")
+
     # C12 延迟统计 (信息项)
     lat = {}
     for _, d in http:

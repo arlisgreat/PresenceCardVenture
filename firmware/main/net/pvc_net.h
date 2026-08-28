@@ -36,6 +36,10 @@ extern "C" {
 #define PVC_WIFI_PASS ""
 #endif
 #define PVC_HW_MODEL "cores3"
+/* web 端基地址 (配对二维码用); 空则二维码只编码配对码文本 */
+#ifndef PVC_WEB_BASE
+#define PVC_WEB_BASE ""
+#endif
 
 typedef enum {
     PVC_NET_IDLE = 0,
@@ -54,8 +58,9 @@ typedef struct {
     void (*show_prov)(const char *ble_name, const char *pop);
     /* 状态栏短文案, 如 "BLE" "WiFi..." "Pair" "Online" "Off" */
     void (*status)(pvc_net_state_t st, const char *detail);
-    /* feed 更新通知 (§3): total=缓存总数, fresh=本次新增 */
-    void (*feed_update)(int total, int fresh);
+    /* feed 更新通知 (§3): total=缓存总数, fresh=本次新增,
+     * new_likes=本人照片新增被赞数 (仪式感: 飘心/提示音) */
+    void (*feed_update)(int total, int fresh, int new_likes);
 } pvc_net_ui_t;
 
 /* 启动联网任务 (NVS init + WiFi STA + 配对 + 上传队列)。ui 可为 NULL。 */
@@ -68,7 +73,8 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui);
  * 有 SD 卡时落盘 /sdcard/queue 断电不丢; 否则驻留 PSRAM (重启丢失)。
  */
 esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len,
-                                const char *filter_id, int beauty);
+                                const char *filter_id, int beauty,
+                                const char *caption);
 
 /* 请求立即拉取 feed / 发送积压点赞 (UI 打开好友页或点赞后调用) */
 void pvc_net_signal_feed(void);

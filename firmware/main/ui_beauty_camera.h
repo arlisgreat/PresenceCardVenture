@@ -27,7 +27,7 @@ void ui_net_show_pair(const char *code);
 void ui_net_hide_pair(void);
 void ui_net_show_prov(const char *ble_name, const char *pop);  /* BLE 配网引导页 */
 void ui_net_set_status(const char *txt);
-void ui_net_feed_updated(int total, int fresh);   /* feed 缓存有更新 (§3) */
+void ui_net_feed_updated(int total, int fresh, int new_likes);  /* feed 更新/被赞 */
 
 /* web 下发配置应用 (pvc_config 回调; 内部加显示锁) */
 #include "pvc_config.h"

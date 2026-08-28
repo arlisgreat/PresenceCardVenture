@@ -198,7 +198,8 @@ static void net_task(void *arg)
                 s_feed_synced = true;
                 if (s_ui.feed_update) {
                     pvc_feed_item_t tmp[PVC_FEED_MAX];
-                    s_ui.feed_update(pvc_feed_snapshot(tmp, PVC_FEED_MAX), fresh);
+                    s_ui.feed_update(pvc_feed_snapshot(tmp, PVC_FEED_MAX), fresh,
+                                     pvc_feed_take_new_likes());
                 }
             }
             /* 拉取失败: 保持 last_feed_poll, 下轮唤醒再试 */
@@ -246,9 +247,10 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
 }
 
 esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len,
-                                const char *filter_id, int beauty)
+                                const char *filter_id, int beauty,
+                                const char *caption)
 {
-    esp_err_t err = pvc_upload_enqueue(jpg, len, filter_id, beauty);
+    esp_err_t err = pvc_upload_enqueue(jpg, len, filter_id, beauty, caption);
     if (err == ESP_OK && s_ev) xEventGroupSetBits(s_ev, BIT_PHOTO);
     return err;
 }

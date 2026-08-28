@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                             "ui_beauty_camera.c" "pvc_power.c" "pvc_clock.c"
-                            "pvc_jpeg.c"
+                            "pvc_jpeg.c" "pvc_sound.c"
                             "net/pvc_net.c" "net/pvc_store.c" "net/pvc_http.c"
                             "net/pvc_pair.c" "net/pvc_upload.c" "net/pvc_prov.c"
                             "net/pvc_feed.c" "net/pvc_config.c"
