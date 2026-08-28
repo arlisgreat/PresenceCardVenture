@@ -196,11 +196,12 @@ body::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-i
 .friend-add input { min-width: 0; flex: 1; border: 1px solid var(--hair); background: var(--paper); padding: 7px 8px; font-size: 10px; }
 .friend-add button, .friend-request button { border: 1px solid var(--blush-d); background: var(--blush); color: var(--ink); padding: 5px 8px; font-size: 10px; }
 .friend-add button:disabled, .friend-request button:disabled { opacity: .5; cursor: wait; }
-.invite-card { display: grid; grid-template-columns: 1fr auto; gap: 9px 8px; padding: 13px 9px; border-bottom: 1px solid var(--hair); background: rgba(246,223,228,.26); }
-.invite-card > div { min-width: 0; }
+.invite-card { display: grid; grid-template-columns: 1fr 74px; gap: 9px 8px; padding: 13px 9px; border-bottom: 1px solid var(--hair); background: rgba(246,223,228,.26); }
+.invite-copy { min-width: 0; }
 .invite-card .panel-label { display: block; color: var(--ink); letter-spacing: .12em; }
-.invite-card small { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; white-space: nowrap; }
-.invite-card strong { align-self: center; color: var(--blush-d); font: 600 16px monospace; letter-spacing: .12em; }
+.invite-card small { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.invite-card strong { display: block; margin-top: 13px; color: var(--blush-d); font: 600 16px monospace; letter-spacing: .12em; }
+.invite-qr { width: 74px; height: 74px; display: block; padding: 4px; border: 1px solid var(--hair); background: var(--paper); image-rendering: pixelated; }
 .invite-card button { grid-column: 1 / -1; width: 100%; border: 1px solid var(--blush-d); background: transparent; color: var(--blush-d); padding: 7px 8px; font-size: 10px; text-align: left; }
 .invite-card button:hover:not(:disabled) { background: rgba(255,255,255,.65); }
 .invite-card button:disabled { opacity: .45; cursor: wait; }
