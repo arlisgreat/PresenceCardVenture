@@ -30,7 +30,8 @@
 | T11 | 静默轮询周期 | 无操作 60s 入睡后等定时唤醒 | `[FW] SLEEP reason=idle` → 5min 后 `[FW] boot quiet=1` → 无亮屏 → `SLEEP reason=poll_done uptime_ms<45000`(C10) |
 | T12 | 静默期触摸唤醒 | quiet 窗口内触屏 | `quiet=1` boot 后出现触摸 → 亮屏恢复 UI,不误入睡 |
 | T13 | 耐久 2h | 脚本每 5min 好友上传一张;设备自然睡醒循环 | `stat` 心跳 heap 无持续下滑(C11);无 panic;所有 upload/feed 闭环 |
-| T14 | 无 SD 降级 | 拔 SD 上电 | boot 报 sdcard mount failed;拍照 `upload queued store=ram` 仍上传成功;相册不可用不崩溃 |
+| T14 | 无 SD 降级 | 拔 SD 上电 | boot 报 sdcard mount failed;拍照 `upload_queued store=ram` 仍上传成功;相册不可用不崩溃 |
+| T15 | 性能基准 | 预览静置 60s → 逐个切 6 种滤镜各 10s → 开贴纸 10s → 连拍 5 张 → 好友页翻 8 张 | `perf_preview` 帧率红线(C13):目标 25fps,均值 <20 WARN、<10 FAIL;`perf_photo`/`perf_encode` 快门→入队 avg<3s(C14);`perf_feed_decode` 单张 <500ms;滤镜/贴纸开启前后帧率差记录在报告里 |
 
 ## 真机专项验证(非自动判定,人工看一次)
 

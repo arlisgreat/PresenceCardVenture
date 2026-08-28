@@ -247,14 +247,15 @@ static void preview_timer_cb(lv_timer_t *t)
     perf_rend_us += (uint32_t)esp_timer_get_time() - t0;
     app_camera_release();
 
-    /* 每秒输出一次: FPS / 平均渲染耗时 / 渲染 CPU 占比 / 剩余堆 */
+    /* 每秒输出一次: FPS / 平均渲染耗时 / 渲染 CPU 占比 / 剩余堆
+     * (perf_preview 供 analyze_log.py 判帧率红线: 目标 25, 低于阈值报警) */
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (now_ms - perf_last_ms >= 1000) {
-        ESP_LOGI(TAG, "[perf] FPS=%lu render_avg=%luus render_cpu=%lu%% heap_free=%lu",
-                 (unsigned long)perf_frames,
-                 (unsigned long)(perf_frames ? perf_rend_us / perf_frames : 0),
-                 (unsigned long)(perf_rend_us / 10000), /* us/秒 -> % (1e6us=100%) */
-                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+        PVC_EV("perf_preview fps=%lu render_avg_us=%lu cpu_pct=%lu heap=%lu",
+               (unsigned long)perf_frames,
+               (unsigned long)(perf_frames ? perf_rend_us / perf_frames : 0),
+               (unsigned long)(perf_rend_us / 10000), /* us/秒 -> % (1e6us=100%) */
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
         static uint32_t perf_sec = 0;
         if ((++perf_sec % 30) == 0) { /* 每 30s 输出一次各算子平均耗时 */
             hw2d_stats_dump();
@@ -389,8 +390,10 @@ static const char *const k_filter_api_id[HW2D_FILTER_MAX] = {
 static void upload_photo_qvga(const uint16_t *src, uint32_t w, uint32_t h)
 {
     if (!s_preview_qvga) return;
+    int64_t t0 = esp_timer_get_time();
     /* 复用预览 QVGA 缓冲做降采样目标 (同 LVGL 任务, 与预览定时器无并发) */
     hw2d_scale_stat(src, w, h, s_preview_qvga, UI_W, UI_H);
+    int64_t t_scale = esp_timer_get_time();
 
     /* esp32-camera 的 fmt2jpg 按高字节在前 (相机原生序) 解析 RGB565,
      * 本管线缓冲为小端 uint16 (LVGL RGB565), 编码前字节交换。
@@ -402,6 +405,7 @@ static void upload_photo_qvga(const uint16_t *src, uint32_t w, uint32_t h)
         be[i]     = le[i + 1];
         be[i + 1] = le[i];
     }
+    int64_t t_swap = esp_timer_get_time();
 
     uint8_t *jpg = NULL;
     size_t jlen = 0;
@@ -416,6 +420,10 @@ static void upload_photo_qvga(const uint16_t *src, uint32_t w, uint32_t h)
         if (jlen <= 100 * 1024) break;
     }
     PSRAM_FREE(be);
+    int64_t t_enc = esp_timer_get_time();
+    PVC_EV("perf_encode scale_ms=%d swap_ms=%d encode_ms=%d bytes=%u",
+           (int)((t_scale - t0) / 1000), (int)((t_swap - t_scale) / 1000),
+           (int)((t_enc - t_swap) / 1000), (unsigned)jlen);
     if (!jpg || jlen > 100 * 1024) {
         if (jpg) free(jpg);
         ESP_LOGE(TAG, "jpeg encode failed or oversize");
@@ -438,6 +446,7 @@ static void take_photo(void)
         toast_show("无画面");
         return;
     }
+    int64_t t0 = esp_timer_get_time();
 
     /* 闪光: hw2d_fill 全屏白, 立即刷新 */
     hw2d_fill(s_canvas_buf, UI_W * UI_H, 0xFFFF);
@@ -466,6 +475,7 @@ static void take_photo(void)
     uint32_t pbytes = pw * ph * 2;
     hw2d_copy(snap, f->buf, pbytes);
     app_camera_release();
+    int64_t t_grab = esp_timer_get_time();
 
     /* 磨皮 (hw2d 平面法, blur_prepare 内部自动适配 VGA) */
     if (s_smooth > 0) {
@@ -473,9 +483,11 @@ static void take_photo(void)
     } else {
         memcpy(work, snap, pbytes);
     }
+    int64_t t_blur = esp_timer_get_time();
 
     /* 精确滤镜 (逐像素饱和) */
     hw2d_filter_exact_stat(snap, work, pw * ph, &s_active_filter);
+    int64_t t_filter = esp_timer_get_time();
 
     /* 保存 (VGA 640x480) */
     mkdir("/sdcard/DCIM", 0755);
@@ -483,11 +495,18 @@ static void take_photo(void)
     static uint32_t seq = 0;
     snprintf(path, sizeof(path), "/sdcard/DCIM/img_%05lu.bmp", (unsigned long)seq++);
     save_bmp(path, snap, pw, ph);
+    int64_t t_bmp = esp_timer_get_time();
     PVC_EV("photo_captured w=%lu h=%lu file=img_%05lu.bmp",
            (unsigned long)pw, (unsigned long)ph, (unsigned long)(seq - 1));
 
     /* 上传闭环: 降采样 320x240 -> JPEG -> 幂等待传队列 (docs/02 §2) */
     upload_photo_qvga(snap, pw, ph);
+
+    /* 快门到入队的分段耗时 (scale/swap/encode 细分在 perf_encode) */
+    PVC_EV("perf_photo grab_ms=%d blur_ms=%d filter_ms=%d bmp_ms=%d total_ms=%d",
+           (int)((t_grab - t0) / 1000), (int)((t_blur - t_grab) / 1000),
+           (int)((t_filter - t_blur) / 1000), (int)((t_bmp - t_filter) / 1000),
+           (int)((esp_timer_get_time() - t0) / 1000));
 
     PSRAM_FREE(snap);
     PSRAM_FREE(work);
@@ -806,6 +825,7 @@ static void render_feed(void)
     if (s_feed_idx < 0) s_feed_idx = 0;
     if (s_feed_idx >= s_feed_n) s_feed_idx = s_feed_n - 1;
     const pvc_feed_item_t *it = &s_feed_items[s_feed_idx];
+    int64_t t0 = esp_timer_get_time();
 
     uint8_t *jpg = PSRAM_MALLOC(160 * 1024);
     uint8_t *rgb = PSRAM_MALLOC(FRAME_BYTES);   /* 解码输出 (相机字节序) */
@@ -834,6 +854,9 @@ static void render_feed(void)
         hw2d_fill(s_feed_buf, UI_W * UI_H, rgb565(0x20, 0x26, 0x34));
         ESP_LOGW(TAG, "feed decode failed: %s (%lux%lu len=%d)",
                  it->photo_id, (unsigned long)w, (unsigned long)h, len);
+    } else {
+        PVC_EV("perf_feed_decode ms=%d bytes=%d",
+               (int)((esp_timer_get_time() - t0) / 1000), len);
     }
 
     char line[112];

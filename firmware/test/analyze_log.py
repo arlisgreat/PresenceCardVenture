@@ -237,6 +237,61 @@ def run_checks(ev, http, sleeps, boots, panics):
     else:
         r.add("C11", "SKIP", f"stat 心跳不足 ({len(heaps)} 条, 需≥4, 跑久一点)")
 
+    # C13 预览帧率 (目标 25fps, 定时器 40ms; 低于阈值说明渲染/总线过载)
+    pp = evs("perf_preview")
+    fps = [int(d["fps"]) for d in pp if "fps" in d]
+    # 拍照/翻相册的那一秒帧率会掉, 排除 0 帧样本后再统计, 但单独报告停顿
+    active = [x for x in fps if x > 0]
+    if active:
+        avg = statistics.mean(active)
+        cpu = [int(d.get("cpu_pct", 0)) for d in pp]
+        stalls = len(fps) - len(active)
+        if avg < 10:
+            v = "FAIL"
+        elif avg < 20:
+            v = "WARN"
+        else:
+            v = "PASS"
+        r.add("C13", v,
+              f"预览帧率 avg={avg:.1f} min={min(active)} max={max(active)} fps "
+              f"(样本 {len(active)}s, 渲染 CPU avg={statistics.mean(cpu):.0f}%"
+              + (f", 全停顿 {stalls}s" if stalls else "") + ")")
+    else:
+        r.add("C13", "SKIP", "无 perf_preview 事件 (预览未运行)")
+
+    # C14 拍照管线时延 (快门 -> JPEG 入队)
+    photos = evs("perf_photo")
+    encs = evs("perf_encode")
+    if photos:
+        def col(rows, k):
+            return [int(d[k]) for d in rows if k in d]
+        totals = col(photos, "total_ms")
+        lines = [
+            "grab avg=%dms  blur avg=%dms  filter avg=%dms  bmp avg=%dms" % (
+                statistics.mean(col(photos, "grab_ms") or [0]),
+                statistics.mean(col(photos, "blur_ms") or [0]),
+                statistics.mean(col(photos, "filter_ms") or [0]),
+                statistics.mean(col(photos, "bmp_ms") or [0])),
+        ]
+        if encs:
+            lines.append("scale avg=%dms  swap avg=%dms  jpeg avg=%dms  avg %dKB" % (
+                statistics.mean(col(encs, "scale_ms") or [0]),
+                statistics.mean(col(encs, "swap_ms") or [0]),
+                statistics.mean(col(encs, "encode_ms") or [0]),
+                statistics.mean(col(encs, "bytes") or [0]) / 1024))
+        avg_t = statistics.mean(totals) if totals else 0
+        v = "FAIL" if avg_t > 5000 else ("WARN" if avg_t > 3000 else "PASS")
+        r.add("C14", v,
+              f"拍照管线 {len(photos)} 次: 快门→入队 avg={int(avg_t)}ms "
+              f"max={max(totals) if totals else 0}ms (阈值 warn>3s fail>5s)", lines)
+        feed_dec = col(evs("perf_feed_decode"), "ms")
+        if feed_dec:
+            r.add("C14a", "INFO",
+                  f"feed 解码 avg={int(statistics.mean(feed_dec))}ms "
+                  f"max={max(feed_dec)}ms ({len(feed_dec)} 次)")
+    else:
+        r.add("C14", "SKIP", "无拍照性能事件")
+
     # C12 延迟统计 (信息项)
     lat = {}
     for _, d in http:

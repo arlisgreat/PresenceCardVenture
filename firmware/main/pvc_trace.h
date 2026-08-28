@@ -11,6 +11,12 @@
  *   photo_captured / photo_encoded / upload_queued|sent|drop|defer
  *   feed_poll / feed_err / react_send / config_recv / config_ack
  *   stat (30s 心跳: heap/min_heap/queue/state)
+ * 性能埋点:
+ *   perf_preview (每秒: fps/render_avg_us/cpu_pct/heap; 帧率红线 C13)
+ *   perf_photo   (每次快门: grab/blur/filter/bmp/total ms; 管线时延 C14)
+ *   perf_encode  (每次编码: scale/swap/encode ms + bytes)
+ *   perf_feed_decode (好友照片解码 ms)
+ *   算子级明细另见 hw2d_stats_dump 的 30s 汇总 (人读, 不进分析器)
  */
 #pragma once
 
