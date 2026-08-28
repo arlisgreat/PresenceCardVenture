@@ -51,6 +51,7 @@
 #include "pvc_net.h"
 #include "pvc_feed.h"
 #include "pvc_store.h"      /* boot 计数: 相册文件名跨重启唯一 */
+#include "pvc_clock.h"
 #include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
@@ -584,7 +585,6 @@ static void panel_item(lv_obj_t *panel, const char *txt, int thumb_idx,
     lv_label_set_text(l, txt);
     lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_text_color(l, lv_color_white(), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
 }
 
 /* ---------- 滤镜面板 ---------- */
@@ -601,7 +601,7 @@ static void open_filter_panel(void)
 {
     lv_obj_t *p = panel_create(56);
     static const char *const names[HW2D_FILTER_MAX] = {
-        "原图", "白皙", "暖阳", "冷调", "黑白", "复古"
+        "原图", "净白", "暖阳", "冷调", "黑白", "复古"
     };
     for (int i = 0; i < HW2D_FILTER_MAX; i++) {
         panel_item(p, names[i], i, 6 + i * 52, on_filter_click, i);
@@ -974,11 +974,21 @@ void ui_net_feed_updated(int total, int fresh)
     bsp_display_unlock();
 }
 
+/* ================= 状态栏时钟 ================= */
+static void clock_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_status_l) return;
+    char hhmm[8];
+    pvc_clock_hhmm(hhmm, sizeof(hhmm));
+    lv_label_set_text(s_status_l, hhmm);
+}
+
 /* ================= 状态栏 / 卡片 ================= */
 static const char *filter_name(hw2d_filter_id_t f)
 {
     static const char *const n[HW2D_FILTER_MAX] = {
-        "原图", "白皙", "暖阳", "冷调", "黑白", "复古"
+        "原图", "净白", "暖阳", "冷调", "黑白", "复古"
     };
     return n[f];
 }
@@ -1065,7 +1075,7 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_shadow_width(status, 0, 0);
 
     s_status_l = lv_label_create(status);
-    lv_label_set_text(s_status_l, "09:41");
+    lv_label_set_text(s_status_l, "--:--");
     lv_obj_set_pos(s_status_l, 8, 3);
     lv_obj_set_style_text_color(s_status_l, lv_color_white(), 0);
 
@@ -1121,12 +1131,12 @@ void ui_beauty_camera_create(void)
     s_card_white = lv_label_create(s_beauty_card);
     lv_obj_set_pos(s_card_white, 8, 4);
     lv_obj_set_style_text_color(s_card_white, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_card_white, &lv_font_montserrat_14, 0);
+
 
     s_card_smooth = lv_label_create(s_beauty_card);
     lv_obj_set_pos(s_card_smooth, 8, 22);
     lv_obj_set_style_text_color(s_card_smooth, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_card_smooth, &lv_font_montserrat_14, 0);
+
 
     /* ---------- 底部工具栏 ---------- */
     lv_obj_t *bar = lv_obj_create(scr);
@@ -1340,6 +1350,9 @@ void ui_beauty_camera_create(void)
 
     /* 预览刷新定时器 (25 FPS): 每 tick grab 最新帧 -> 渲染 -> release */
     lv_timer_create(preview_timer_cb, 40, NULL);
+
+    /* 状态栏真实时钟 (SNTP/RTC 驱动, 每 5s 刷一次足够) */
+    lv_timer_create(clock_timer_cb, 5000, NULL);
 }
 
 /* ================= 联网层 UI 桥 (pvc_net 回调, 任意任务可调) ================= */

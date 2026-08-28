@@ -28,6 +28,7 @@
 #include "pvc_net.h"
 #include "pvc_config.h"
 #include "pvc_power.h"
+#include "pvc_clock.h"
 
 static const char *TAG = "main";
 
@@ -79,6 +80,9 @@ void app_main(void)
     }
     if (!quiet) bsp_display_backlight_on();
     ESP_LOGI(TAG, "CoreS3 display + LVGL ready");
+
+    /* 计时: TZ + 冷启动从 BM8563 恢复 (I2C 已由 BSP 初始化) */
+    pvc_clock_init();
 
     /* 2. SD 卡: 相册 /sdcard/DCIM + 待传队列 /sdcard/queue。
      *    挂载失败不致命: 相册不可用, 待传队列降级 PSRAM。 */

@@ -9,7 +9,22 @@
 
 ## 环境准备
 
-- dev server 或 mock(docs/02 §7);`PVC_API_BASE` 指向该环境后编译烧录
+**本地联调模式(推荐,上板第一天即可全流程闭环,不依赖云端)**:
+server 就在本仓库,demo 模式无需数据库,自带 3 个种子用户与 4 张照片:
+
+```bash
+cd server/api && npm ci && npm run dev        # 起在 http://0.0.0.0:3000
+```
+
+固件 `PVC_API_BASE` 指向 Mac 局域网地址(与设备同一 WiFi):
+`-D PVC_API_BASE=\"http://<mac-ip>:3000/v1\"`——pvc_http 对 http:// 直接放行
+(证书校验仅对 https 生效),编译烧录即可跑通配对→上传→feed 全链路。
+web 端 `cd server/web && npm ci && npm run dev` 用种子账号(ayan/momo/luna,
+token `demo-token` 等)输配对码、看照片、下发配置。
+
+**云端 dev 环境**:全栈提供域名后把 `PVC_API_BASE` 换成
+`https://api-dev.<域名>/v1` 重编译(走证书 bundle 校验)。
+
 - 一台绑定了另一账号(好友)的 web 会话,用于触发 feed / 配置下发
 - server 侧操作全部可用 curl 脚本化(见各用例"触发方式")
 

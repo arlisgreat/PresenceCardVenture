@@ -14,6 +14,7 @@
 #include "lvgl.h"
 
 #include "app_camera.h"
+#include "pvc_clock.h"
 #include "pvc_trace.h"
 #include "net/pvc_net.h"
 #include "net/pvc_upload.h"
@@ -81,6 +82,7 @@ static void power_task(void *arg)
 
         /* 每 30s 心跳: 堆水位/队列深度, 供耐久测试做泄漏与阻塞检测 */
         if ((++tick % 30) == 0) {
+            pvc_clock_tick();       /* SNTP 就绪后把时间写回 BM8563 (一次) */
             PVC_EV("stat heap=%lu min_heap=%lu queue=%d state=%d up_ms=%lu",
                    (unsigned long)esp_get_free_heap_size(),
                    (unsigned long)esp_get_minimum_free_heap_size(),

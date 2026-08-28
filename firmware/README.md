@@ -10,9 +10,17 @@
 ```bash
 cd firmware
 pio run -e cores3              # 编译
+pio run -e cores3 -t erase     # ⚠️ 首次烧录必须全擦: 本工程用自定义分区表,
+                               #    旧布局残留的 NVS/OTA 数据会导致启动异常
 pio run -e cores3 -t upload    # 烧录 (USB-C, 必要时长按 RST 3 秒进下载模式)
 pio device monitor -b 115200   # 串口日志
 ```
+
+BLE 配网手机端:App Store / Google Play 搜索 **"ESP BLE Provisioning"**
+(Espressif 官方),或用串口打印的 QR JSON 扫码直连。
+
+本地联调(不依赖云端): 见 [test/testplan.md](test/testplan.md) 环境准备节 ——
+仓库内 server 以 demo 模式本地运行, `PVC_API_BASE` 指向局域网即可闭环。
 
 联网配置在 [platformio.ini](platformio.ini) build_flags:
 
