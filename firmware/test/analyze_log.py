@@ -310,6 +310,31 @@ def run_checks(ev, http, sleeps, boots, panics):
     if pdrop:
         r.add("C16", "WARN", f"连拍过快被拒 {len(pdrop)} 次 (worker 队列深 2)")
 
+    # C17 任务栈水位 (剩余最小字节; <512 FAIL, <1024 WARN; -1=任务不存在跳过)
+    stacks = evs("stack")
+    if stacks:
+        worst = {}
+        for d in stacks:
+            for k, v in d.items():
+                try:
+                    n = int(v)
+                except ValueError:
+                    continue
+                if n < 0:
+                    continue
+                worst[k] = min(worst.get(k, 1 << 30), n)
+        crit = {k: v for k, v in worst.items() if v < 512}
+        warn = {k: v for k, v in worst.items() if 512 <= v < 1024}
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(worst.items()))
+        if crit:
+            r.add("C17", "FAIL", f"栈余量危险 (<512B): {crit}", [detail])
+        elif warn:
+            r.add("C17", "WARN", f"栈余量偏低 (<1KB): {warn}", [detail])
+        else:
+            r.add("C17", "PASS", f"各任务栈最小余量健康: {detail}")
+    else:
+        r.add("C17", "SKIP", "无 stack 水位事件")
+
     # C12 延迟统计 (信息项)
     lat = {}
     for _, d in http:

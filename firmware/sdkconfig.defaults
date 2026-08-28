@@ -29,6 +29,14 @@ CONFIG_FATFS_LFN_HEAP=y
 # CoreS3 板载 16MB flash (PlatformIO 默认探测可能误判为 2MB)
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
+# --- 任务栈 (栈溢出 review) ---
+# esp_event 系统任务默认 2304B 过小 (wifi/prov 事件回调在其栈上, ESP_LOG 即近极限)
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+# main 任务默认 3584B: app_main 里创建整套 LVGL UI, 加大到 6144
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# 栈溢出金丝雀检测 (IDF 默认已开, 显式声明防误关)
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+
 # --- BLE 配网 (wifi_provisioning + NimBLE, 比 Bluedroid 省 ~100KB) ---
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y

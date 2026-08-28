@@ -86,6 +86,22 @@ static void power_task(void *arg)
                    (unsigned long)esp_get_minimum_free_heap_size(),
                    pvc_upload_depth(), (int)pvc_net_state(),
                    (unsigned long)(esp_timer_get_time() / 1000));
+            /* 各任务栈剩余最小水位 (字节; IDF StackType_t=1B)。
+             * analyzer C17 红线: <512 FAIL, <1024 WARN。-1 = 任务不存在 */
+            static const char *const k_watch[] = {
+                "pvc_net", "photo_wk", "taskLVGL", "cam_task", "sys_evt",
+            };
+            char line[112];
+            int off = snprintf(line, sizeof(line), "stack self=%u",
+                               (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            for (unsigned i = 0; i < sizeof(k_watch) / sizeof(k_watch[0]); i++) {
+                TaskHandle_t h = xTaskGetHandle(k_watch[i]);
+                off += snprintf(line + off, sizeof(line) - (size_t)off,
+                                " %s=%d", k_watch[i],
+                                h ? (int)uxTaskGetStackHighWaterMark(h) : -1);
+                if (off >= (int)sizeof(line)) break;
+            }
+            PVC_EV("%s", line);
         }
 
         pvc_net_state_t st = pvc_net_state();

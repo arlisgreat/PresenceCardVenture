@@ -49,6 +49,11 @@ pvc_net_state_t pvc_net_state(void) { return s_state; }
 /* ---------------- WiFi STA ---------------- */
 static bool s_provisioning;    /* BLE 配网期间抑制断线状态刷新 */
 
+/*
+ * 注意: 本回调运行在 esp_event 系统任务上 (栈仅 2-4KB, 且不得阻塞) ——
+ * 只允许事件组位操作与 esp_wifi_connect(); printf/埋点/UI 回调一律
+ * 移到 net_task (wait_wifi) 中完成。
+ */
 static void wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -56,13 +61,31 @@ static void wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(s_ev, BIT_WIFI_UP);
         if (s_provisioning) return;    /* 配网握手期的断连由 prov manager 处理 */
-        PVC_EV("wifi_down ok=0");
-        set_state(PVC_NET_OFFLINE, "wifi lost");
-        /* 事件循环内禁止阻塞: 立即重连, 驱动层自带扫描间隔即天然节流 */
+        /* 立即重连, 驱动层自带扫描间隔即天然节流 */
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        PVC_EV("wifi_up ok=1");
         xEventGroupSetBits(s_ev, BIT_WIFI_UP);
+    }
+}
+
+/* net_task 专用: 等待 wifi 就绪, 并在此 (16KB 大栈) 补打状态与埋点 */
+static bool s_wifi_up_seen;
+
+static void wait_wifi(void)
+{
+    for (;;) {
+        EventBits_t bits = xEventGroupWaitBits(s_ev, BIT_WIFI_UP, pdFALSE,
+                                               pdTRUE, pdMS_TO_TICKS(5000));
+        if (bits & BIT_WIFI_UP) break;
+        if (s_wifi_up_seen) {          /* 从在线掉线: 打点 + 状态栏 Off */
+            s_wifi_up_seen = false;
+            PVC_EV("wifi_down ok=0");
+            set_state(PVC_NET_OFFLINE, "wifi lost");
+        }
+    }
+    if (!s_wifi_up_seen) {
+        s_wifi_up_seen = true;
+        PVC_EV("wifi_up ok=1");
     }
 }
 
@@ -121,7 +144,7 @@ static void net_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    xEventGroupWaitBits(s_ev, BIT_WIFI_UP, pdFALSE, pdTRUE, portMAX_DELAY);
+    wait_wifi();
     ESP_LOGI(TAG, "wifi connected");
 
     /* SNTP 对时 (§0: 设备本地时间用 SNTP; 失败不致命) */
@@ -135,7 +158,7 @@ static void net_task(void *arg)
     for (;;) {
         /* 无 token -> 配对 (§1) */
         while (!pvc_store_token()[0]) {
-            xEventGroupWaitBits(s_ev, BIT_WIFI_UP, pdFALSE, pdTRUE, portMAX_DELAY);
+            wait_wifi();
             set_state(PVC_NET_PAIRING, NULL);
             if (pvc_pair_run(&s_ui) != ESP_OK) {
                 set_state(PVC_NET_OFFLINE, "pair fail");
@@ -145,7 +168,7 @@ static void net_task(void *arg)
         set_state(PVC_NET_ONLINE, NULL);
 
         /* 排空待传队列; 401 -> 清 token 回配对流程 (§0 错误表) */
-        xEventGroupWaitBits(s_ev, BIT_WIFI_UP, pdFALSE, pdTRUE, portMAX_DELAY);
+        wait_wifi();
         pvc_up_result_t r = pvc_upload_drain();
         if (r == PVC_UP_AUTH_FAIL) {
             ESP_LOGW(TAG, "401 TOKEN_INVALID: clearing token, back to pairing");

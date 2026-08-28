@@ -53,8 +53,26 @@ void app_main(void)
     printf("[FW] boot presence-card fw=%s api_base=%s quiet=%d\n",
            FW_VERSION, PVC_API_BASE, (int)quiet);
 
-    /* 1. 初始化 LCD + LVGL (返回 LVGL display 句柄, 非 esp_err_t) */
-    lv_display_t *disp = bsp_display_start();
+    /* 1. 初始化 LCD + LVGL。覆盖 BSP 默认:
+     *    - LVGL 任务绑 core0 (默认 -1 不绑核, 会与 core1 的拍照 worker 抢核)
+     *    - 栈 7168->10240 (相册 JPEG 解码 + FATFS I/O 跑在此任务栈上) */
+    bsp_display_cfg_t disp_cfg = {
+        .lvgl_port_cfg = {
+            .task_priority = 4,
+            .task_stack = 10240,
+            .task_affinity = 0,
+            .task_max_sleep_ms = 500,
+            .task_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT,
+            .timer_period_ms = 5,
+        },
+        .buffer_size = BSP_LCD_DRAW_BUFF_SIZE,
+        .double_buffer = BSP_LCD_DRAW_BUFF_DOUBLE,
+        .flags = {
+            .buff_dma = true,
+            .buff_spiram = false,
+        },
+    };
+    lv_display_t *disp = bsp_display_start_with_config(&disp_cfg);
     if (!disp) {
         ESP_LOGE(TAG, "bsp_display_start failed");
         return;
