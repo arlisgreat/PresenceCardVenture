@@ -1,4 +1,5 @@
 #include "pvc_feed.h"
+#include "pvc_config.h"
 #include "pvc_http.h"
 #include "pvc_store.h"
 
@@ -151,10 +152,11 @@ void pvc_feed_init(void)
 }
 
 /* ---------------- 拉取 ---------------- */
-/* GET /device/state (§3.1); 返回 unseen_count, 错误 <0 */
+/* GET /device/state (§3.1); 返回 unseen_count, 错误 <0。
+ * 同时把响应交给 pvc_config 处理 web 下发的 pending_config。 */
 static int fetch_state(void)
 {
-    char rbuf[1024];
+    char rbuf[2048];    /* 含 pending_config/active_config, 1KB 不够 */
     pvc_http_req_t req = { .method = "GET", .path = "/device/state", .auth = true };
     pvc_http_resp_t resp = { .buf = rbuf, .cap = sizeof(rbuf) };
     if (pvc_http_request(&req, &resp) != ESP_OK) return PVC_FEED_ERR;
@@ -166,6 +168,7 @@ static int fetch_state(void)
     if (!j) return PVC_FEED_ERR;
     const cJSON *ju = cJSON_GetObjectItem(j, "unseen_count");
     if (cJSON_IsNumber(ju)) unseen = ju->valueint;
+    pvc_config_handle_state((const struct cJSON *)j);
     cJSON_Delete(j);
     return unseen;
 }

@@ -4,6 +4,7 @@
 #include "pvc_prov.h"
 #include "pvc_upload.h"
 #include "pvc_feed.h"
+#include "pvc_config.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -170,6 +171,12 @@ static void net_task(void *arg)
                 }
             }
             /* 拉取失败: 保持 last_feed_poll, 下轮唤醒再试 */
+        }
+
+        /* 配置回执 (state 解析时可能置了待发 ack) */
+        if (pvc_config_process_ack() == PVC_FEED_AUTH) {
+            pvc_store_clear_token();
+            continue;
         }
 
         /* 等新照片/feed 信号或周期唤醒 */

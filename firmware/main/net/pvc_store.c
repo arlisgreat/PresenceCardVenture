@@ -14,11 +14,13 @@ static const char *TAG = "pvc_store";
 #define KEY_TOKEN    "token"
 #define KEY_BOOTCNT  "boot_cnt"
 #define KEY_ETAG     "feed_etag"
+#define KEY_CFG      "cfg_id"
 
 static nvs_handle_t s_nvs;
 static char     s_device_id[20];               /* dvc_ + 12 hex + NUL */
 static char     s_token[PVC_TOKEN_MAX];
 static char     s_etag[PVC_ETAG_MAX];
+static char     s_cfg_id[PVC_CFG_ID_MAX];
 static uint32_t s_boot_cnt;
 static uint32_t s_photo_seq;                   /* RAM, 每次启动归零 */
 
@@ -50,6 +52,10 @@ esp_err_t pvc_store_init(void)
     len = sizeof(s_etag);
     if (nvs_get_str(s_nvs, KEY_ETAG, s_etag, &len) != ESP_OK) {
         s_etag[0] = '\0';
+    }
+    len = sizeof(s_cfg_id);
+    if (nvs_get_str(s_nvs, KEY_CFG, s_cfg_id, &len) != ESP_OK) {
+        s_cfg_id[0] = '\0';
     }
 
     nvs_get_u32(s_nvs, KEY_BOOTCNT, &s_boot_cnt);
@@ -83,6 +89,16 @@ void pvc_store_clear_token(void)
 
 uint32_t pvc_store_boot_count(void)     { return s_boot_cnt; }
 uint32_t pvc_store_next_photo_seq(void) { return ++s_photo_seq; }
+
+const char *pvc_store_last_cfg(void) { return s_cfg_id; }
+
+void pvc_store_set_last_cfg(const char *cfg_id)
+{
+    strncpy(s_cfg_id, cfg_id, sizeof(s_cfg_id) - 1);
+    s_cfg_id[sizeof(s_cfg_id) - 1] = '\0';
+    nvs_set_str(s_nvs, KEY_CFG, s_cfg_id);
+    nvs_commit(s_nvs);
+}
 
 const char *pvc_store_etag(void) { return s_etag; }
 

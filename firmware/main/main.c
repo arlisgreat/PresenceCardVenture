@@ -26,6 +26,7 @@
 #include "app_camera.h"
 #include "ui_beauty_camera.h"
 #include "pvc_net.h"
+#include "pvc_config.h"
 #include "pvc_power.h"
 
 static const char *TAG = "main";
@@ -91,6 +92,7 @@ void app_main(void)
         .status         = net_status_cb,
         .feed_update    = ui_net_feed_updated,
     };
+    pvc_config_set_apply_cb(ui_apply_remote_config);
     err = pvc_net_start(&net_ui);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "pvc_net_start failed: %s", esp_err_to_name(err));

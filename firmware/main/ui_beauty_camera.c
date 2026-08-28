@@ -891,6 +891,33 @@ static void on_feed_heart(lv_event_t *e)
     toast_show("已点赞");
 }
 
+/* pvc_config 回调 (联网任务): 应用 web 下发的配置 */
+void ui_apply_remote_config(const pvc_config_t *cfg)
+{
+    if (!bsp_display_lock(1000)) return;
+
+    /* filter_id (web 清单) -> 端侧滤镜, 与上传映射 k_filter_api_id 互逆 */
+    if (strcmp(cfg->filter_id, "none") == 0)       s_filter = HW2D_FILTER_ORIGINAL;
+    else if (strcmp(cfg->filter_id, "warm") == 0)  s_filter = HW2D_FILTER_WARM;
+    else if (strcmp(cfg->filter_id, "bw") == 0)    s_filter = HW2D_FILTER_BW;
+    else if (strcmp(cfg->filter_id, "film") == 0)  s_filter = HW2D_FILTER_VINTAGE;
+    else if (strcmp(cfg->filter_id, "vivid") == 0) s_filter = HW2D_FILTER_COOL;
+    /* 未知 id: 保持当前滤镜 */
+
+    s_white = (cfg->beauty < 0) ? 0 : (cfg->beauty > 100 ? 100 : cfg->beauty);
+
+    /* server sticker 枚举 none/star/date 与端侧现有贴纸素材不对应:
+     * none 关闭贴纸; star/date 待素材到位后映射 */
+    if (strcmp(cfg->sticker, "none") == 0) s_sticker = -1;
+    /* play_type (beauty/ccd/template): 端侧当前单一拍摄模式, 记录忽略 */
+
+    update_active_filter();
+    s_thumb_dirty = true;
+    update_status();
+    toast_show("已应用新配置");
+    bsp_display_unlock();
+}
+
 /* pvc_net 回调 (联网任务): feed 有更新 */
 void ui_net_feed_updated(int total, int fresh)
 {
