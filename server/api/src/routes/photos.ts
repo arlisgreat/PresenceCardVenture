@@ -90,6 +90,9 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     if (!p) return reply.code(404).send(errorBody('NOT_FOUND','photo not found'))
     if (p.authorId !== u.id) return reply.code(403).send(errorBody('FORBIDDEN','not owner'))
     try { await files.remove(p) } catch { return reply.code(503).send(errorBody('STORAGE_UNAVAILABLE', 'photo storage unavailable')) }
+    if (photoMetadataRepository) {
+      try { await photoMetadataRepository.remove(p.id) } catch { return reply.code(503).send(errorBody('PERSISTENCE_UNAVAILABLE', 'photo metadata unavailable')) }
+    }
     store.photos.delete(p.id)
     return reply.code(204).send()
   })

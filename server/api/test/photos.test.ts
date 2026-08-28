@@ -244,3 +244,40 @@ test('dual-writes uploaded metadata through an injected photo repository', async
   assert.match(saved[0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
   await app.close()
 })
+
+test('deletes photo metadata through an injected repository after storage removal', async () => {
+  const removed: string[] = []
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async () => undefined,
+    findById: async () => undefined,
+    findByIdempotency: async () => undefined,
+    remove: async (id: string) => { removed.push(id) },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata-delete', photoMetadataRepository })
+  const created = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'metadata-delete-1', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  const photoId = created.json().photo_id
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${photoId}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 204)
+  assert.deepEqual(removed, [photoId])
+  await app.close()
+})
+
+test('keeps photo metadata when the injected repository cannot delete', async () => {
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async () => undefined,
+    findById: async () => undefined,
+    findByIdempotency: async () => undefined,
+    remove: async () => { throw new Error('database offline') },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata-delete-failure', photoMetadataRepository })
+  const created = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'metadata-delete-failure-1', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  const photoId = created.json().photo_id
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${photoId}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 503)
+  assert.equal(deleted.json().error.code, 'PERSISTENCE_UNAVAILABLE')
+  const feed = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  assert.ok(feed.json().items.some((item: any) => item.photo_id === photoId))
+  await app.close()
+})
