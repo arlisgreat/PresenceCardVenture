@@ -6,3 +6,6 @@ dist/
 .pio/
 .vscode/
 *.log
+# ESP-IDF 生成物 (由 sdkconfig.defaults / idf_component.yml 再生)
+firmware/managed_components/
+firmware/sdkconfig.cores3
