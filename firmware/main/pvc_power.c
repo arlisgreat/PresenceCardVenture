@@ -91,9 +91,9 @@ static void power_task(void *arg)
             /* 各任务栈剩余最小水位 (字节; IDF StackType_t=1B)。
              * analyzer C17 红线: <512 FAIL, <1024 WARN。-1 = 任务不存在 */
             static const char *const k_watch[] = {
-                "pvc_net", "photo_wk", "taskLVGL", "cam_task", "sys_evt",
+                "pvc_net", "photo_wk", "taskLVGL", "cam_task", "sys_evt", "pvc_face",
             };
-            char line[112];
+            char line[144];
             int off = snprintf(line, sizeof(line), "stack self=%u",
                                (unsigned)uxTaskGetStackHighWaterMark(NULL));
             for (unsigned i = 0; i < sizeof(k_watch) / sizeof(k_watch[0]); i++) {

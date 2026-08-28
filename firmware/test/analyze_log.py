@@ -351,6 +351,17 @@ def run_checks(ev, http, sleeps, boots, panics):
         if len(dings) < len(arr):
             r.add("C18a", "WARN", f"到达 {len(arr)} 次但 ding 音仅 {len(dings)} 次 (喇叭失效?)")
 
+    # C19 人脸检测 (贴纸跟脸): 耗时与命中率
+    faces = evs("perf_face")
+    if faces:
+        ms = [int(d.get("ms", 0)) for d in faces]
+        hit = sum(1 for d in faces if int(d.get("faces", 0)) > 0)
+        v = "WARN" if statistics.mean(ms) > 300 else "INFO"
+        r.add("C19", v,
+              f"人脸检测 {len(faces)} 次: avg={int(statistics.mean(ms))}ms "
+              f"max={max(ms)}ms 有脸帧占比 {100*hit//len(faces)}%"
+              + (" (avg>300ms, 跟随会迟滞)" if v == "WARN" else ""))
+
     # C12 延迟统计 (信息项)
     lat = {}
     for _, d in http:

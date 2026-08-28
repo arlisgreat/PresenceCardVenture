@@ -55,6 +55,7 @@
 #include "pvc_clock.h"
 #include "pvc_jpeg.h"
 #include "pvc_sound.h"
+#include "pvc_face.h"
 #include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
@@ -193,6 +194,7 @@ static uint16_t s_white_line[UI_W]; /* 贴纸混合用白色源 (静态) */
 static void blend_circle(uint16_t *canvas, int cx, int cy, int r, uint8_t alpha)
 {
     hw2d_fill(s_white_line, UI_W, 0xFFFF);
+    if (cx - r < 0 || cx + r >= UI_W) return;   /* 跟脸坐标可能越界: 整圆裁剪 */
     for (int y = cy - r; y <= cy + r; y++) {
         int x0, x1, x;
         if (y < 0 || y >= UI_H) continue;
@@ -215,11 +217,23 @@ static void blend_circle(uint16_t *canvas, int cx, int cy, int r, uint8_t alpha)
 /* 贴纸与缩略图刷新 (canvas 已含滤镜后画面; thumb_src 为未滤镜 QVGA 或 NULL) */
 static void render_overlays(const uint16_t *thumb_src)
 {
-    /* 贴纸 (SRC_OVER 硬件混合): 兔耳两个圆 */
+    /* 贴纸 (SRC_OVER 硬件混合): 有人脸框则跟脸放置, 否则固定位置 */
     if (s_sticker >= 0 && s_sticker < 6) {
-        blend_circle(s_canvas_buf, 84, 30, 21, 170);
-        blend_circle(s_canvas_buf, 236, 30, 21, 170);
-        blend_circle(s_canvas_buf, 160, 26, 14, 200); /* 头顶装饰 */
+        pvc_face_box_t fb;
+        if (pvc_face_latest(&fb)) {
+            int r = fb.w / 6;
+            if (r < 8) r = 8;
+            if (r > 32) r = 32;
+            int ey = fb.y - fb.h / 10;
+            blend_circle(s_canvas_buf, fb.x + fb.w / 4, ey, r, 170);
+            blend_circle(s_canvas_buf, fb.x + (fb.w * 3) / 4, ey, r, 170);
+            blend_circle(s_canvas_buf, fb.x + fb.w / 2, fb.y - fb.h / 6,
+                         (r * 2) / 3, 200);
+        } else {
+            blend_circle(s_canvas_buf, 84, 30, 21, 170);
+            blend_circle(s_canvas_buf, 236, 30, 21, 170);
+            blend_circle(s_canvas_buf, 160, 26, 14, 200); /* 头顶装饰 */
+        }
     }
     lv_obj_invalidate(s_canvas);
     if (thumb_src) update_thumbs(thumb_src);
@@ -243,6 +257,7 @@ static void preview_timer_cb(lv_timer_t *t)
         /* 缩略图需要未滤镜的 QVGA 源, 仅在到期帧 (每 8 帧) 额外产出 */
         if (thumb_due && s_preview_qvga) {
             hw2d_scale_stat(f->buf, CAP_W, CAP_H, s_preview_qvga, UI_W, UI_H);
+            if (s_sticker >= 0) pvc_face_submit(s_preview_qvga);
             s_thumb_dirty = false;
             render_overlays(s_preview_qvga);
         } else {
@@ -252,6 +267,7 @@ static void preview_timer_cb(lv_timer_t *t)
         /* QVGA 回退路径 (相机初始化降级时): 走原两遍路径 */
         hw2d_filter_lut_stat(s_canvas_buf, f->buf, UI_W * UI_H, &s_active_filter);
         if (thumb_due) {
+            if (s_sticker >= 0) pvc_face_submit(f->buf);
             s_thumb_dirty = false;
             render_overlays(f->buf);
         } else {
@@ -723,6 +739,9 @@ static void on_sticker_click(lv_event_t *e)
 {
     s_sticker = (int)(intptr_t)lv_event_get_user_data(e);
     close_panel();
+    if (s_sticker >= 0 && !pvc_face_init()) {
+        toast_show("人脸跟随不可用");     /* 模型缺失: 贴纸回落固定位置 */
+    }
 }
 
 static void open_sticker_panel(void)

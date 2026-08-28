@@ -49,6 +49,7 @@ token `demo-token` 等)输配对码、看照片、下发配置。
 | T16 | 配对/配网二维码 | 首次开机看配网页; 解绑后看配对页 | 配网页二维码可被 "ESP BLE Provisioning" App 扫码直连; 配对页二维码内容为 PVC-PAIR:<码> (设 PVC_WEB_BASE 后为绑定 URL) |
 | T17 | 到达仪式感 | 好友上传一张 (设备亮屏与灭屏各测一次) | `[EV] arrival fresh=N shown=1`; 亮屏 + ding 音 + 自动展示 3s 后收起; 期间触摸则保留页面; `sound id=1` |
 | T18 | 配文与点赞 | 拍照后 6s 内选短语; 好友页双击照片; 用 web 给设备照片点赞 | `caption sel=N`+`caption used=1`+server 端照片带 caption; `like via=double_tap`+`react_send`; 下轮轮询 `likes new=N`+飘字+`sound id=2` |
+| T19 | 贴纸跟脸 | 开贴纸对准人脸移动/离开画面 | `face_init ok=1`; `perf_face ms= faces=`(C19, avg<300ms); 贴纸随脸移动, 无脸 2s 后回落固定位; 检测期间预览帧率无明显下降(C13) |
 | T15 | 性能基准 | 预览静置 60s → 逐个切 6 种滤镜各 10s → 开贴纸 10s → 连拍 5 张 → 好友页翻 8 张 | `perf_preview` 帧率红线(C13):目标 25fps,均值 <20 WARN、<10 FAIL;`perf_photo`/`perf_encode` 快门→入队 avg<3s(C14);`perf_feed_decode` 单张 <500ms;滤镜/贴纸开启前后帧率差记录在报告里 |
 
 ## 真机专项验证(非自动判定,人工看一次)
