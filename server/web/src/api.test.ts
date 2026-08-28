@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getDeviceFeed, getDeviceStateForToken, getPairStatus, publishAiJob, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceStateForToken, getPairStatus, publishAiJob, pushDeviceConfig, uploadDevicePhoto, uploadPhoto } from './api.js'
+
+test('current user helper reads the authenticated profile and friend code', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; authorization?: string } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), authorization: new Headers(init?.headers).get('Authorization') ?? undefined }
+    return new Response(JSON.stringify({ id: 'u_demo_1', username: 'ayan', display_name: '阿岩', friend_code: '100001' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const user = await getCurrentUser()
+    assert.equal(user.friend_code, '100001')
+    assert.deepEqual(request, { url: '/v1/me', authorization: 'Bearer demo-token' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
   const calls: Array<{ url: string; method: string; authorization?: string }> = []

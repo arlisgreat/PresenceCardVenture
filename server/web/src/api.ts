@@ -30,6 +30,7 @@ export type Message = {
 
 export type Friend = { username: string; display_name: string }
 export type FriendRequest = { id: string; status: 'pending' | 'accepted'; direction: 'incoming' | 'outgoing'; requester: Friend; addressee: Friend; created_at: string }
+export type CurrentUser = { id: string; username: string; display_name: string; friend_code: string }
 
 export type AiJob = {
   id: string
@@ -128,6 +129,10 @@ async function requestWithToken<T>(path: string, token: string, init?: RequestIn
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestWithToken<T>(path, 'demo-token', init)
+}
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+  return request<CurrentUser>('/me')
 }
 
 export async function getFeed(): Promise<FeedItem[]> {

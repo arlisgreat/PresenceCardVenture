@@ -26,6 +26,12 @@ export async function buildApp(options: { uploadsDir?: string; store?: DemoStore
     const ready = !requireProductionServices || missing.length === 0
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ready' : 'blocked', mode: requireProductionServices ? 'production' : 'demo', checks, missing })
   })
+  app.get('/v1/me', async (r: any, reply) => {
+    const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+    const user = store.userForToken(token)
+    if (!user) return reply.code(401).send(errorBody('TOKEN_INVALID', 'token invalid'))
+    return { id: user.id, username: user.username, display_name: user.displayName, friend_code: user.friendCode }
+  })
   app.post('/v1/pair/code', async (r:any,reply)=>{const {device_id}=r.body??{};if(!device_id)return reply.code(400).send(errorBody('BAD_REQUEST','device_id required'));let code='';do { code=String(randomInt(100000, 1000000)) } while ([...store.devices.values()].some(device => device.pairCode === code));const existing=store.devices.get(device_id);store.devices.set(device_id,{...existing,pairCode:code,expiresAt:Date.now()+600000});return {pair_code:code,expires_in:600}})
   app.get('/v1/pair/status', async (r:any,reply)=>{const d=store.devices.get(r.query.device_id);if(!d||d.pairCode!==r.query.pair_code)return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));if(!d.userId)return reply.code(202).send({status:'pending'});return {status:'bound',device_token:d.token,user:{username:store.user(d.userId)?.username,display_name:store.user(d.userId)?.displayName}}})
   app.post('/v1/pair/bind', async (r:any,reply)=>{const u=store.userForToken(String(r.headers.authorization??'').replace(/^Bearer\s+/i,'')), body=r.body??{}, d=store.devices.get(body.device_id);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));if(!d||d.pairCode!==body.pair_code||!d.expiresAt||d.expiresAt<Date.now())return reply.code(410).send(errorBody('PAIR_EXPIRED','pair code expired'));d.userId=u.id;d.token=d.token??`device-token-${body.device_id}`;return {status:'bound',device_id:body.device_id,user:{username:u.username,display_name:u.displayName}}})
