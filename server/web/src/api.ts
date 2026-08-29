@@ -156,7 +156,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 
 export async function getFeed(): Promise<FeedItem[]> {
   try {
-    const data = await request<{ items?: FeedItem[] }>('/feed?limit=20')
+    const data = await request<{ items?: FeedItem[] }>('/feed?limit=20', { cache: 'no-store' })
     return (data.items ?? []).map(item => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoAssetByPhotoId[item.photo_id] ?? item.image_url } : { ...item, id: item.photo_id ?? item.id })
   } catch (error) {
     return offlineFallback(error, () => demoFeed)
@@ -319,7 +319,7 @@ export async function bindDevice(deviceId: string, pairCode: string): Promise<vo
 }
 
 export async function getPairStatus(deviceId: string, pairCode: string): Promise<PairStatus> {
-  return request<PairStatus>(`/pair/status?device_id=${encodeURIComponent(deviceId)}&pair_code=${encodeURIComponent(pairCode)}`)
+  return request<PairStatus>(`/pair/status?device_id=${encodeURIComponent(deviceId)}&pair_code=${encodeURIComponent(pairCode)}`, { cache: 'no-store' })
 }
 
 export async function deviceHeartbeat(deviceToken: string): Promise<void> {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { clearUserToken, fetchWithUserSession, getUserToken, setUserToken } from './user-session.js'
+import { canBindHardwarePairing, clearUserToken, fetchWithUserSession, getUserToken, setUserToken } from './user-session.js'
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
@@ -33,6 +33,20 @@ test('user session persists a selected token and clearing restores the demo fall
   assert.equal(storage.getItem('presence.user-token'), null)
 }))
 
+test('physical pairing rejects the public demo fallback but allows local or explicit sessions', () => withLocalStorage(() => {
+  assert.equal(canBindHardwarePairing('presence.example.com'), false)
+  assert.equal(canBindHardwarePairing('localhost'), true)
+  assert.equal(canBindHardwarePairing('127.0.0.1'), true)
+  assert.equal(canBindHardwarePairing('localhost.example.com'), false)
+
+  setUserToken('demo-token')
+  assert.equal(canBindHardwarePairing('presence.example.com'), false)
+  setUserToken('signed-in-user-token')
+  assert.equal(canBindHardwarePairing('presence.example.com'), true)
+  clearUserToken()
+  assert.equal(canBindHardwarePairing('presence.example.com'), false)
+}))
+
 test('authenticated fetch preserves request headers and uses the selected user token', () => withLocalStorage(async () => {
   const originalFetch = globalThis.fetch
   let request: { url: string; headers: Headers } | undefined
@@ -50,4 +64,3 @@ test('authenticated fetch preserves request headers and uses the selected user t
     globalThis.fetch = originalFetch
   }
 }))
-

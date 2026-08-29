@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import QRCode from 'qrcode'
 import { AiJob, DeviceConfig, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
 import { acknowledgeDeviceConfig, queueDeviceConfig, type DeviceConfigSyncState } from './device-config'
+import { clearDevicePairLinkFromUrl, readDevicePairLink } from './device-pair-link'
+import { completeDevicePairing } from './device-pairing'
 import { parseDeviceSession, serializeDeviceSession } from './device-session'
 import { buildInviteUrl, readInviteCode } from './invite'
 import { runAction } from './action-result'
-import { fetchWithUserSession } from './user-session'
+import { canBindHardwarePairing, fetchWithUserSession } from './user-session'
 import './styles.css'
 
 type View = 'feed' | 'create' | 'messages' | 'ai' | 'device' | 'footprint' | 'library'
@@ -33,6 +35,10 @@ const DEVICE_ID = 'dvc_a1b2c3d4'
 const DEVICE_DEMO_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
 const DEVICE_SESSION_KEY = 'presence-device-session'
 type PlaySelection = { filterId: string; playType: PlayType; beauty: number; sticker: string; name: string }
+
+function deviceSessionKey(deviceId: string) {
+  return deviceId === DEVICE_ID ? DEVICE_SESSION_KEY : `${DEVICE_SESSION_KEY}:${deviceId}`
+}
 
 function formatTime(value: string) {
   const date = new Date(value)
@@ -77,7 +83,8 @@ function InviteQr({ value }: { value: string }) {
 }
 
 function App() {
-  const [view, setView] = useState<View>('feed')
+  const [devicePairLink] = useState(() => readDevicePairLink(window.location.pathname, window.location.search))
+  const [view, setView] = useState<View>(() => devicePairLink ? 'device' : 'feed')
   const [inviteCodeFromUrl] = useState(() => readInviteCode(window.location.search))
   const [feed, setFeed] = useState<FeedItem[]>([])
   const [circle, setCircle] = useState('全部')
@@ -87,11 +94,15 @@ function App() {
   const [deviceState, setDeviceState] = useState({ unseen_count: 0, pending_friend_requests: 0, server_time: '' })
   const [selectedConfig, setSelectedConfig] = useState<PlaySelection>({ filterId: 'none', playType: 'beauty', beauty: 42, sticker: 'none', name: '原色' })
 
+  useLayoutEffect(() => {
+    clearDevicePairLinkFromUrl(devicePairLink, path => window.history.replaceState(window.history.state, '', path))
+  }, [devicePairLink])
+
   useEffect(() => {
     void getFeed().then(setFeed).catch(() => setToast('圈子暂时无法读取，请检查连接或登录状态'))
     void getDeviceState().then(setDeviceState).catch(() => setToast('设备状态暂时无法读取'))
   }, [])
-  useEffect(() => { if (inviteCodeFromUrl) setView('messages') }, [inviteCodeFromUrl])
+  useEffect(() => { if (inviteCodeFromUrl && !devicePairLink) setView('messages') }, [devicePairLink, inviteCodeFromUrl])
   useEffect(() => { if (!toast) return; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout) }, [toast])
 
   const visibleFeed = useMemo(() => filterFeedByCircle(feed, circle), [circle, feed])
@@ -163,7 +174,7 @@ function App() {
         {view === 'create' && <CreateView onPublished={onPublished} onCancel={() => setView('feed')} onToast={setToast} />}
         {view === 'messages' && <MessagesView onToast={setToast} initialCode={inviteCodeFromUrl} />}
         {view === 'ai' && <AiView feed={feed} onToast={setToast} onPublished={item => { setFeed(current => current.some(entry => entry.id === item.id) ? current : [item, ...current]); setToast('AI 合照已发布到小圈') }} />}
-        {view === 'device' && <DeviceView state={deviceState} feed={feed} selectedConfig={selectedConfig} onToast={setToast} />}
+        {view === 'device' && <DeviceView state={deviceState} feed={feed} selectedConfig={selectedConfig} deviceId={devicePairLink?.deviceId ?? DEVICE_ID} initialPairCode={devicePairLink?.pairCode ?? ''} hardwarePairing={Boolean(devicePairLink)} onToast={setToast} />}
       </main>
       {toast && <div className="toast" role="status"><span>✦</span>{toast}</div>}
     </div>
@@ -298,13 +309,14 @@ function AiView({ feed, onToast, onPublished }: { feed: FeedItem[]; onToast: (me
   return <section className="content-wrap ai-view"><div className="studio-head"><div><p className="section-kicker">AI STUDIO / 合照</p><h2>让两份在场，遇见一次。</h2><p>选择已授权的素材，云端会为你们合成一张新的记忆。</p></div><div className="consent-badge">⌁ 素材已授权</div></div><div className="ai-layout"><div><div className="material-grid">{candidates.map(item => <button key={item.id} className={selected.includes(item.id) ? 'material selected' : 'material'} onClick={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : current.length < 2 ? [...current, item.id] : current)}><ProtectedImage src={item.image_url} alt="可用于合照的照片" /><span>{selected.includes(item.id) ? `0${selected.indexOf(item.id) + 1}` : '＋'}</span><small>{item.author.display_name} · {item.filter_id}</small></button>)}</div><div className="selection-meter"><span>已选素材</span><b>{selected.length} / 2</b><i><em style={{ width: `${selected.length * 50}%` }} /></i></div></div><div className="ai-result"><div className="result-art">{job?.status === 'completed' && job.resultUrl ? <ProtectedImage src={job.resultUrl} alt="AI 合照结果" /> : <><span className="result-symbol">⌁</span><p>{job?.status === 'processing' ? '正在把两份记忆放在一起…' : job?.status === 'queued' ? '已排队，云端马上开始…' : job?.status === 'failed' ? (job.message ?? '合照生成失败，请稍后重试。') : '合照会出现在这里'}</p></>}</div><div className="job-status"><div><span className={job?.status === 'completed' ? 'status-dot done' : job?.status === 'failed' ? 'status-dot failed' : 'status-dot'} /><b>{statusLabel}</b>{published && <small className="published-label"> · 已发布</small>}</div><div className="job-actions"><button className="primary-button" onClick={() => void create()} disabled={job?.status === 'queued' || job?.status === 'processing'}>{job?.status === 'completed' ? '再生成一张' : job?.status === 'failed' ? '重试生成' : '生成合照'}<span>→</span></button>{job?.status === 'completed' && !published && <button className="quiet-button" disabled={publishBusy} onClick={() => void publish()}>{publishBusy ? '发布中…' : '发布到圈子'}</button>}{job?.status === 'completed' && <button className="quiet-button" onClick={() => void removeResult()}>移除结果</button>}</div></div></div></div></section>
 }
 
-function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_count: number; pending_friend_requests: number; server_time: string }; feed: FeedItem[]; selectedConfig: PlaySelection; onToast: (message: string) => void }) {
-  const [logs, setLogs] = useState<string[]>(['device boot · CoreS3 Lite', 'GET /v1/device/state · 200', `unseen_count = ${state.unseen_count}`])
+function DeviceView({ state, feed, selectedConfig, deviceId, initialPairCode, hardwarePairing, onToast }: { state: { unseen_count: number; pending_friend_requests: number; server_time: string }; feed: FeedItem[]; selectedConfig: PlaySelection; deviceId: string; initialPairCode: string; hardwarePairing: boolean; onToast: (message: string) => void }) {
+  const [logs, setLogs] = useState<string[]>(hardwarePairing ? [`device link · ${deviceId}`] : ['device boot · CoreS3 Lite', 'GET /v1/device/state · 200', `unseen_count = ${state.unseen_count}`])
   const [busyAction, setBusyAction] = useState<string | null>(null)
-  const [pairCode, setPairCode] = useState('')
+  const [pairCode, setPairCode] = useState(initialPairCode)
+  const [hardwareBound, setHardwareBound] = useState(false)
   const [deviceToken, setDeviceToken] = useState(() => {
-    if (typeof window === 'undefined') return ''
-    try { return parseDeviceSession(window.localStorage.getItem(DEVICE_SESSION_KEY))?.deviceToken ?? '' } catch { return '' }
+    if (typeof window === 'undefined' || hardwarePairing) return ''
+    try { return parseDeviceSession(window.localStorage.getItem(deviceSessionKey(deviceId)))?.deviceToken ?? '' } catch { return '' }
   })
   const [devicePhotoUrl, setDevicePhotoUrl] = useState('')
   const [deviceFeedEtag, setDeviceFeedEtag] = useState('')
@@ -312,16 +324,21 @@ function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_
   const [pairingBusy, setPairingBusy] = useState(false)
   function configLabel(config: DeviceConfig) { return { id: config.id, name: filters.find(item => item.id === config.filter_id)?.name ?? config.filter_id } }
   useEffect(() => {
+    if (hardwarePairing) {
+      try { window.localStorage.removeItem(deviceSessionKey(deviceId)) } catch { /* storage may be unavailable */ }
+      return
+    }
     if (!deviceToken) return
     void getDeviceStateForToken(deviceToken).then(deviceState => {
       setConfigSync({ active: deviceState.active_config ? configLabel(deviceState.active_config) : null, pending: deviceState.pending_config ? configLabel(deviceState.pending_config) : null })
     }).catch(() => {
       setDeviceToken('')
-      try { window.localStorage.removeItem(DEVICE_SESSION_KEY) } catch { /* storage may be unavailable */ }
+      try { window.localStorage.removeItem(deviceSessionKey(deviceId)) } catch { /* storage may be unavailable */ }
     })
-  }, [deviceToken])
+  }, [deviceId, deviceToken, hardwarePairing])
   function log(message: string) { setLogs(current => [`${new Date().toLocaleTimeString('zh-CN', { hour12: false })}  ${message}`, ...current].slice(0, 8)); onToast(message) }
   async function runAction(action: string, message: string) {
+    if (hardwarePairing) { onToast('该操作由真实设备完成'); return }
     setBusyAction(action)
     try {
       if (action === 'feed') {
@@ -332,14 +349,14 @@ function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_
         log(page.not_modified ? 'GET /v1/feed · 304 · unchanged' : `GET /v1/feed · 200 · ${page.items.length} items`)
       } else if (action === 'config') {
         if (!deviceToken) { onToast('先绑定设备，再下发玩法'); return }
-        const result = await pushDeviceConfig(DEVICE_ID, selectedConfig)
+        const result = await pushDeviceConfig(deviceId, selectedConfig)
         const state = await getDeviceStateForToken(deviceToken)
         if (state.pending_config?.id !== result.config_id) throw new Error('device config was not queued')
         setConfigSync(current => queueDeviceConfig(current, { id: result.config_id, name: selectedConfig.name }))
         log(`POST /v1/device/config · 202 · ${selectedConfig.name} queued · state confirmed`)
       } else if (action === 'upload') {
         if (!deviceToken) { onToast('先绑定设备，再模拟拍照上传'); return }
-        const result = await uploadDevicePhoto(new Blob([DEVICE_DEMO_JPEG], { type: 'image/jpeg' }), deviceToken, DEVICE_ID, `web-device-${Date.now()}`)
+        const result = await uploadDevicePhoto(new Blob([DEVICE_DEMO_JPEG], { type: 'image/jpeg' }), deviceToken, deviceId, `web-device-${deviceId}-${Date.now()}`)
         setDevicePhotoUrl(result.url ?? `/v1/photos/${result.photo_id}/image`)
         log(`POST /v1/photos · 201 · ${result.photo_id}`)
       } else if (action === 'ack') {
@@ -353,10 +370,51 @@ function DeviceView({ state, feed, selectedConfig, onToast }: { state: { unseen_
       }
     } catch { onToast('设备请求暂时无法完成') } finally { setBusyAction(null) }
   }
-  async function pair() { setPairingBusy(true); try { const result = await requestPairCode(DEVICE_ID); setPairCode(result.pair_code); log(`POST /v1/pair/code · 200 · expires ${result.expires_in}s`) } catch { onToast('配对码暂时无法获取') } finally { setPairingBusy(false) } }
-  async function bind() { if (!pairCode) { onToast('先领取设备配对码'); return }; setPairingBusy(true); try { await bindDevice(DEVICE_ID, pairCode); const status = await getPairStatus(DEVICE_ID, pairCode); if (!status.device_token) throw new Error('device token missing'); setDeviceToken(status.device_token); try { window.localStorage.setItem(DEVICE_SESSION_KEY, serializeDeviceSession({ deviceToken: status.device_token })) } catch { /* storage may be unavailable */ } await deviceHeartbeat(status.device_token); const deviceState = await getDeviceStateForToken(status.device_token); setConfigSync({ active: deviceState.active_config ? configLabel(deviceState.active_config) : null, pending: deviceState.pending_config ? configLabel(deviceState.pending_config) : null }); log('POST /v1/pair/bind · 200 · device bound · heartbeat 204') } catch { onToast('配对码已过期，请重新领取') } finally { setPairingBusy(false) } }
+  async function pair() { setPairingBusy(true); try { const result = await requestPairCode(deviceId); setPairCode(result.pair_code); log(`POST /v1/pair/code · 200 · expires ${result.expires_in}s`) } catch { onToast('配对码暂时无法获取') } finally { setPairingBusy(false) } }
+  async function bind() {
+    if (!pairCode) { onToast('先领取设备配对码'); return }
+    if (hardwarePairing && !canBindHardwarePairing(window.location.hostname)) {
+      onToast('请先登录，再绑定真实设备')
+      return
+    }
+    setPairingBusy(true)
+    try {
+      const result = await completeDevicePairing({
+        hardwarePairing,
+        bind: () => bindDevice(deviceId, pairCode),
+        getStatus: () => getPairStatus(deviceId, pairCode),
+        saveToken: deviceToken => {
+          setDeviceToken(deviceToken)
+          try { window.localStorage.setItem(deviceSessionKey(deviceId), serializeDeviceSession({ deviceToken })) } catch { /* storage may be unavailable */ }
+        },
+        heartbeat: deviceHeartbeat,
+        getState: getDeviceStateForToken,
+      })
+      if (result.mode === 'hardware') {
+        setHardwareBound(true)
+        setPairCode('')
+        log('POST /v1/pair/bind · 200 · device bound')
+        return
+      }
+      const deviceState = result.deviceState
+      setConfigSync({ active: deviceState.active_config ? configLabel(deviceState.active_config) : null, pending: deviceState.pending_config ? configLabel(deviceState.pending_config) : null })
+      log('POST /v1/pair/bind · 200 · device bound · heartbeat 204')
+    } catch {
+      onToast('配对码已过期，请重新领取')
+    } finally {
+      setPairingBusy(false)
+    }
+  }
   const displayedConfig = configSync.pending ?? configSync.active
-  return <section className="content-wrap device-view"><div className="studio-head"><div><p className="section-kicker">DEVICE LAB / 联调</p><h2>小卡，准备好在场。</h2><p>用模拟器验证上传、拉取、下发和轻回应，不需要真实硬件。</p></div><span className="device-pill"><span className="live-dot" /> {DEVICE_ID}</span></div><div className="device-layout"><div className="device-card"><div className="device-screen"><div className="screen-top"><span>小卡 · 01</span><span>Wi-Fi ●</span></div><div className="screen-photo">{devicePhotoUrl || feed[0]?.image_url ? <ProtectedImage src={devicePhotoUrl || feed[0].image_url} alt="设备当前照片" /> : <span>等待照片</span>}</div><div className="screen-bottom"><span>✦ {feed[0]?.reactions.heart ?? 0}</span><span>{displayedConfig?.name ?? selectedConfig.name} · 320 × 240</span></div></div><div className="device-controls"><button disabled={busyAction !== null} onClick={() => void runAction('upload', 'POST /v1/photos · 201 · photo uploaded')}>拍照并上传 <span>{busyAction === 'upload' ? '…' : '↑'}</span></button><button disabled={busyAction !== null} onClick={() => void runAction('feed', `GET /v1/feed · 200 · ${feed.length} items`)}>拉取圈子 <span>{busyAction === 'feed' ? '…' : '↓'}</span></button><button disabled={busyAction !== null || !deviceToken} onClick={() => void runAction('config', `POST /v1/device/config · 202 · ${selectedConfig.name} queued`)}>下发玩法 <span>{busyAction === 'config' ? '…' : '⌁'}</span></button><button disabled={busyAction !== null} onClick={() => void runAction('ack', 'POST /v1/device/ack · 204 · acknowledged')}>回执轻信号 <span>{busyAction === 'ack' ? '…' : '✦'}</span></button></div></div><div className="device-info"><div className="pairing-panel"><div><p className="panel-label">设备配对</p><small>设备先领码，再由当前账号绑定。</small></div><div className="pairing-actions"><button onClick={() => void pair()} disabled={pairingBusy}>{pairingBusy ? '处理中…' : '领取配对码'}</button><input aria-label="配对码" inputMode="numeric" maxLength={6} value={pairCode} onChange={event => setPairCode(event.target.value.replace(/\D/g, ''))} placeholder="6 位配对码" /><button onClick={() => void bind()} disabled={pairingBusy || pairCode.length !== 6}>绑定</button></div></div><div className="info-row"><span>设备状态</span><b className="green-text">{deviceToken ? '已绑定 · 在线' : '在线 · 未绑定'}</b></div><div className="info-row"><span>当前玩法</span><b>{displayedConfig?.name ?? selectedConfig.name}</b></div><div className="info-row"><span>未看动态</span><b>{state.unseen_count}</b></div><div className="info-row"><span>待处理好友</span><b>{state.pending_friend_requests}</b></div><div className="info-row"><span>最后同步</span><b>{state.server_time ? formatTime(state.server_time) : '刚刚'}</b></div><div className="log-box"><p>REQUEST LOG</p>{logs.map((log, index) => <code key={`${log}-${index}`}>{log}</code>)}</div></div></div></section>
+  const statusText = hardwarePairing
+    ? (hardwareBound ? '已绑定 · 等待设备上线' : '待绑定')
+    : (deviceToken ? '已绑定 · 在线' : '在线 · 未绑定')
+  return <section className="content-wrap device-view">
+    <div className="studio-head"><div><p className="section-kicker">DEVICE LAB / 联调</p><h2>小卡，准备好在场。</h2><p>{hardwarePairing ? '绑定后由设备自行领取凭证并上线。' : '用模拟器验证上传、拉取、下发和轻回应，不需要真实硬件。'}</p></div><span className="device-pill"><span className="live-dot" /> {deviceId}</span></div>
+    <div className="device-layout"><div className="device-card"><div className="device-screen"><div className="screen-top"><span>小卡 · 01</span><span>Wi-Fi ●</span></div><div className="screen-photo">{devicePhotoUrl || feed[0]?.image_url ? <ProtectedImage src={devicePhotoUrl || feed[0].image_url} alt="设备当前照片" /> : <span>等待照片</span>}</div><div className="screen-bottom"><span>✦ {feed[0]?.reactions.heart ?? 0}</span><span>{displayedConfig?.name ?? selectedConfig.name} · 320 × 240</span></div></div>
+      <div className="device-controls"><button disabled={hardwarePairing || busyAction !== null} onClick={() => void runAction('upload', 'POST /v1/photos · 201 · photo uploaded')}>拍照并上传 <span>{busyAction === 'upload' ? '…' : '↑'}</span></button><button disabled={hardwarePairing || busyAction !== null} onClick={() => void runAction('feed', `GET /v1/feed · 200 · ${feed.length} items`)}>拉取圈子 <span>{busyAction === 'feed' ? '…' : '↓'}</span></button><button disabled={hardwarePairing || busyAction !== null || !deviceToken} onClick={() => void runAction('config', `POST /v1/device/config · 202 · ${selectedConfig.name} queued`)}>下发玩法 <span>{busyAction === 'config' ? '…' : '⌁'}</span></button><button disabled={hardwarePairing || busyAction !== null} onClick={() => void runAction('ack', 'POST /v1/device/ack · 204 · acknowledged')}>回执轻信号 <span>{busyAction === 'ack' ? '…' : '✦'}</span></button></div></div>
+      <div className="device-info"><div className="pairing-panel"><div><p className="panel-label">设备配对</p><small>{hardwarePairing ? '使用设备生成的配对码，由当前账号绑定。' : '设备先领码，再由当前账号绑定。'}</small></div><div className="pairing-actions">{hardwarePairing ? <button disabled>来自设备</button> : <button onClick={() => void pair()} disabled={pairingBusy}>{pairingBusy ? '处理中…' : '领取配对码'}</button>}<input aria-label="配对码" inputMode="numeric" maxLength={6} value={pairCode} disabled={hardwareBound} onChange={event => setPairCode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6 位配对码" /><button onClick={() => void bind()} disabled={hardwareBound || pairingBusy || pairCode.length !== 6}>绑定</button></div></div><div className="info-row"><span>设备状态</span><b className="green-text">{statusText}</b></div><div className="info-row"><span>当前玩法</span><b>{displayedConfig?.name ?? selectedConfig.name}</b></div><div className="info-row"><span>未看动态</span><b>{state.unseen_count}</b></div><div className="info-row"><span>待处理好友</span><b>{state.pending_friend_requests}</b></div><div className="info-row"><span>最后同步</span><b>{state.server_time ? formatTime(state.server_time) : '刚刚'}</b></div><div className="log-box"><p>REQUEST LOG</p>{logs.map((log, index) => <code key={`${log}-${index}`}>{log}</code>)}</div></div></div>
+  </section>
 }
 
 export default App

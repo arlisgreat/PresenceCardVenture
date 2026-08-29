@@ -68,15 +68,20 @@ test('reaction helpers propagate service failures so the view can roll back opti
 
 test('feed keeps seeded asset identity when a new photo changes server ordering', async () => {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = (async () => new Response(JSON.stringify({ items: [
+  let cacheMode: RequestCache | undefined
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    cacheMode = init?.cache
+    return new Response(JSON.stringify({ items: [
     { photo_id: 'p_ai_new', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'none', image_url: '/v1/photos/p_ai_new/image', reactions: {} },
     { photo_id: 'p_demo_1', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', image_url: '/v1/photos/p_demo_1/image', reactions: {} },
     { photo_id: 'p_demo_2', author: { username: 'ayan', display_name: '阿岩' }, filter_id: 'none', image_url: '/v1/photos/p_demo_2/image', reactions: {} },
-  ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
+    ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
   try {
     const feed = await getFeed()
     assert.equal(feed[1].image_url, '/assets/feed-window.jpg')
     assert.equal(feed[2].image_url, '/assets/feed-portrait.jpg')
+    assert.equal(cacheMode, 'no-store')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -121,13 +126,14 @@ test('message sending propagates API errors instead of fabricating a local succe
 })
 
 test('device simulator helpers use the device token and preserve endpoint contracts', async () => {
-  const calls: Array<{ url: string; method: string; authorization?: string }> = []
+  const calls: Array<{ url: string; method: string; authorization?: string; cache?: RequestCache }> = []
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({
       url: String(input),
       method: init?.method ?? 'GET',
       authorization: new Headers(init?.headers).get('Authorization') ?? undefined,
+      cache: init?.cache,
     })
     return new Response(JSON.stringify({ status: 'bound', device_token: 'device-token-test' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }) as typeof fetch
@@ -137,9 +143,9 @@ test('device simulator helpers use the device token and preserve endpoint contra
     await deviceHeartbeat(status.device_token)
     await deviceAck(status.device_token)
     assert.deepEqual(calls, [
-      { url: '/v1/pair/status?device_id=dvc_test&pair_code=123456', method: 'GET', authorization: 'Bearer demo-token' },
-      { url: '/v1/device/heartbeat', method: 'POST', authorization: 'Bearer device-token-test' },
-      { url: '/v1/device/ack', method: 'POST', authorization: 'Bearer device-token-test' },
+      { url: '/v1/pair/status?device_id=dvc_test&pair_code=123456', method: 'GET', authorization: 'Bearer demo-token', cache: 'no-store' },
+      { url: '/v1/device/heartbeat', method: 'POST', authorization: 'Bearer device-token-test', cache: undefined },
+      { url: '/v1/device/ack', method: 'POST', authorization: 'Bearer device-token-test', cache: undefined },
     ])
   } finally {
     globalThis.fetch = originalFetch

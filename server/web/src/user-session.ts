@@ -11,9 +11,21 @@ function browserStorage(): Storage | undefined {
   }
 }
 
+function savedUserToken(): string | undefined {
+  return browserStorage()?.getItem(SESSION_STORAGE_KEY)?.trim() || undefined
+}
+
 export function getUserToken(): string {
-  const saved = browserStorage()?.getItem(SESSION_STORAGE_KEY)?.trim()
-  return saved || fallbackToken
+  return savedUserToken() || fallbackToken
+}
+
+export function hasExplicitUserSession(): boolean {
+  const token = savedUserToken() || configuredToken
+  return Boolean(token && token !== 'demo-token')
+}
+
+export function canBindHardwarePairing(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hasExplicitUserSession()
 }
 
 export function setUserToken(token: string): void {
@@ -33,4 +45,3 @@ export function fetchWithUserSession(input: RequestInfo | URL, init?: RequestIni
   headers.set('Authorization', `Bearer ${getUserToken()}`)
   return fetch(input, { ...init, headers, credentials: init?.credentials ?? 'same-origin' })
 }
-
