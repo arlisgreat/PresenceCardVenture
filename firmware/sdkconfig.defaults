@@ -74,8 +74,10 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # LVGL 用 clib malloc 替代 64KB 内部静态池 (work_mem_int, 真机 .bss 最大头):
 # 小对象经 SPIRAM_MALLOC_ALWAYSINTERNAL 仍走内部, 但 64KB 不再整块占死
 CONFIG_LV_USE_CLIB_MALLOC=y
-# 相机 DMA 降 16KB (QVGA 中断频率仍低), WiFi 静态 RX 10->8: 内部堆再省 ~20KB
-CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=32768
+# 相机 DMA 必须 16KB: 相机在 WiFi 之后初始化 (内存策略), WiFi 池占位后
+# 内部堆拿不出 32KB 连续 DMA 块 (真机实证: 恢复 32KB 后 esp_camera_init
+# 失败无预览)。绿噪点由管线色度平滑解决, 与 DMA 大小无关
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=24
 CONFIG_ESP_WIFI_RX_BA_WIN=6
