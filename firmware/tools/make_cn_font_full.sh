@@ -7,9 +7,14 @@ set -e
 cd "$(dirname "$0")/.."
 FONT=${1:-$HOME/Library/Fonts/NotoSansSC-Regular.ttf}
 mkdir -p build_fonts
+# 注意: 只收 CJK 全集 + 全角区 + ASCII, 其余符号 --symbols 精确点收。
+# 不能整块收 Latin-1/通用标点/CJK 标点区(0x3000-0x303F): 上下标、音调
+# 组合符等极端字形会把行高包络从 20px 撑到 31px, 状态栏 24px 全裁切
+# (真机实证; 单区实测: CJK 17 / 全角 21 / CJK 标点区 31)。
 npx --yes lv_font_conv --font "$FONT" \
-  -r 0x20-0x7E -r 0xA0-0xFF -r 0x2000-0x206F -r 0x3000-0x303F \
+  -r 0x20-0x7E -r 0x3000 \
   -r 0x4E00-0x9FFF -r 0xFF00-0xFFEF \
+  --symbols "、。〈〉《》「」『』【】〔〕·×÷—‘’“”…" \
   --size 16 --bpp 4 --format bin --no-compress \
   -o build_fonts/cn_full_16.bin
 ls -l build_fonts/cn_full_16.bin
