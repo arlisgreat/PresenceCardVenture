@@ -161,6 +161,77 @@ void pvc_algo_test_run(void)
         CHECK(heap_caps_check_integrity_all(true), "heap corrupt it=%d", it);
     }
 
+    /* ================= YUV422 全链路段 (生产主路径) ================= */
+    {
+        uint8_t *yuyv = (uint8_t *)frame;      /* 复用缓冲 (2B/px 同尺寸) */
+        /* YUV 纯红哨兵: Y=76 Cb=84 Cr=255 -> 解码后应红占优 */
+        for (size_t i = 0; i < npix * 2; i += 4) {
+            yuyv[i] = 76; yuyv[i + 1] = 84; yuyv[i + 2] = 76; yuyv[i + 3] = 255;
+        }
+        size_t jl = pvc_jpeg_encode_yuv422(yuyv, w, h, 90, enc, 128 * 1024);
+        CHECK(jl > 0, "yuv sentinel encode failed");
+        if (jl && jpg2rgb565(enc, jl, dec, JPG_SCALE_NONE)) {
+            uint64_t rs = 0, bs = 0;
+            const uint16_t *d16 = (const uint16_t *)dec;
+            for (size_t i = 0; i < npix; i++) {
+                rs += (d16[i] >> 11) & 31;
+                bs += d16[i] & 31;
+            }
+            CHECK(rs / npix >= 22 && bs / npix <= 8,
+                  "yuv order wrong: mean r=%u b=%u",
+                  (unsigned)(rs / npix), (unsigned)(bs / npix));
+        }
+
+        /* 滤镜+磨皮+贴纸 -> 422 编码 -> 解码 -> 与 yuv_filter_rgb565 参考比对 */
+        static hw2d_yuv_luts_t luts, idl;
+        for (int it = 0; it < 6; it++) {
+            for (uint32_t y = 0; y < h; y++) {
+                uint8_t *row = yuyv + (size_t)y * w * 2;
+                for (uint32_t x = 0; x < w; x += 2) {
+                    uint8_t Y0 = (uint8_t)((x * 255) / w);
+                    uint8_t cb = (uint8_t)(64 + (y * 128) / h);
+                    uint8_t cr = (uint8_t)(192 - (y * 128) / h);
+                    row[x * 2] = Y0; row[x * 2 + 1] = cb;
+                    row[x * 2 + 2] = Y0; row[x * 2 + 3] = cr;
+                }
+            }
+            const hw2d_filter_t *f = hw2d_filter_get((hw2d_filter_id_t)it);
+            hw2d_yuv_blur_y(yuyv, yuyv, w, h, 50);
+            hw2d_yuv_build_luts(f, &luts);
+            hw2d_yuv_filter(yuyv, yuyv, npix, &luts);
+            hw2d_yuv_blend_circle(yuyv, w, h, (int)w / 2, (int)h / 3, 20, 170);
+
+            /* 参考: 已滤镜 YUYV 恒等表转 RGB565 */
+            hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_ORIGINAL), &idl);
+            hw2d_yuv_filter_rgb565((uint16_t *)work, yuyv, npix, &idl);
+
+            size_t jn = pvc_jpeg_encode_yuv422(yuyv, w, h, 90, enc, 128 * 1024);
+            CHECK(jn > 0, "yuv encode it=%d failed", it);
+            uint32_t jw = 0, jh = 0;
+            CHECK(jn && pvc_jpeg_dims(enc, jn, &jw, &jh) && jw == w && jh == h,
+                  "yuv dims it=%d", it);
+            if (jn && jpg2rgb565(enc, jn, dec, JPG_SCALE_NONE)) {
+                uint64_t err_sum = 0;
+                const uint16_t *pa = (const uint16_t *)work;
+                const uint16_t *pb = (const uint16_t *)dec;
+                for (size_t i = 0; i < npix; i++) {
+                    int dr = abs(((pa[i] >> 11) & 31) - ((pb[i] >> 11) & 31));
+                    int dg = abs(((pa[i] >> 5) & 63) - ((pb[i] >> 5) & 63));
+                    int db = abs((pa[i] & 31) - (pb[i] & 31));
+                    err_sum += (uint64_t)(dr + dg / 2 + db);
+                }
+                unsigned m10 = (unsigned)(err_sum * 10 / npix);
+                CHECK(m10 < 40, "yuv roundtrip it=%d mean_err=%u.%u",
+                      it, m10 / 10, m10 % 10);
+                printf("[ALGO] yuv it=%d jpeg=%uB mean_err=%u.%u\n",
+                       it, (unsigned)jn, m10 / 10, m10 % 10);
+            } else if (jn) {
+                CHECK(0, "yuv decode it=%d failed", it);
+            }
+            CHECK(heap_caps_check_integrity_all(true), "yuv heap it=%d", it);
+        }
+    }
+
     printf("[ALGO] min_heap=%u stack_hw=%u\n",
            (unsigned)esp_get_minimum_free_heap_size(),
            (unsigned)uxTaskGetStackHighWaterMark(NULL));

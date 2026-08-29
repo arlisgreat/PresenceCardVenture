@@ -399,6 +399,136 @@ void hw2d_alpha_blend(uint16_t *dst, const uint16_t *src, uint32_t npix,
 }
 
 /* ================================================================== */
+/* YUV422 (YCbYCr packed) 算子                                         */
+/* ================================================================== */
+
+void hw2d_yuv_build_luts(const hw2d_filter_t *f, hw2d_yuv_luts_t *luts)
+{
+    if (luts->valid && memcmp(&luts->cached, f, sizeof(*f)) == 0) return;
+
+    /* Y: 对比度 + 亮度偏置 + 加权综合增益 (BT.601 亮度权重折算) */
+    int kc = (f->contrast * 128) / 100;
+    int kg = (f->gain_r * 77 + f->gain_g * 150 + f->gain_b * 29) * 256 / 25600;
+    for (int i = 0; i < 256; i++) {
+        int v = ((i - 128) * kc) / 128 + 128;
+        v = clamp_u8(v + f->bias);
+        luts->y[i] = clamp_u8((v * kg) / 256);
+    }
+    /* Cb/Cr: 饱和度缩放 + 色调偏移 (暖调 gain_r>gain_b -> Cr+, Cb-) */
+    int ks = (f->sat * 128) / 100;
+    /* 色调偏移 1:1 传递 gain 差 (CCD/胶片类滤镜的色偏主要落在色度分量;
+     * cb/cr 为完整 256 项查表, 后续可直接注入任意色度曲线) */
+    int tint_cr = (int)f->gain_r - (int)f->gain_g;
+    int tint_cb = (int)f->gain_b - (int)f->gain_g;
+    for (int i = 0; i < 256; i++) {
+        luts->cb[i] = clamp_u8(128 + (((i - 128) * ks) >> 7) + tint_cb);
+        luts->cr[i] = clamp_u8(128 + (((i - 128) * ks) >> 7) + tint_cr);
+    }
+    luts->cached = *f;
+    luts->valid = true;
+}
+
+void hw2d_yuv_filter(uint8_t *dst, const uint8_t *src, uint32_t npix,
+                     const hw2d_yuv_luts_t *luts)
+{
+    uint32_t nbytes = npix * 2;
+    for (uint32_t i = 0; i + 3 < nbytes; i += 4) {
+        dst[i]     = luts->y[src[i]];
+        dst[i + 1] = luts->cb[src[i + 1]];
+        dst[i + 2] = luts->y[src[i + 2]];
+        dst[i + 3] = luts->cr[src[i + 3]];
+    }
+}
+
+/* BT.601 全范围 YCbCr -> RGB (Q8 定点): R=Y+1.402Cr' G=Y-0.344Cb'-0.714Cr'
+ * B=Y+1.772Cb' (Cb'=Cb-128) */
+static inline uint16_t yuv2rgb565(int y, int cb, int cr)
+{
+    int c = cb - 128, d = cr - 128;
+    int r = y + ((359 * d) >> 8);
+    int g = y - ((88 * c + 183 * d) >> 8);
+    int b = y + ((454 * c) >> 8);
+    return PACK_RGB565(clamp_u8(r), clamp_u8(g), clamp_u8(b));
+}
+
+void hw2d_yuv_filter_rgb565(uint16_t *dst, const uint8_t *src, uint32_t npix,
+                            const hw2d_yuv_luts_t *luts)
+{
+    uint32_t np = npix & ~1u;
+    for (uint32_t i = 0; i < np; i += 2) {
+        const uint8_t *p = src + i * 2;
+        int y0 = luts->y[p[0]];
+        int cb = luts->cb[p[1]];
+        int y1 = luts->y[p[2]];
+        int cr = luts->cr[p[3]];
+        dst[i]     = yuv2rgb565(y0, cb, cr);
+        dst[i + 1] = yuv2rgb565(y1, cb, cr);
+    }
+}
+
+void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,
+                     uint8_t strength)
+{
+    uint32_t nbytes = w * h * 2;
+    if (strength == 0) {
+        if (dst != src) memcpy(dst, src, nbytes);
+        return;
+    }
+    if (hw2d_blur_prepare(w, h) != ESP_OK) {
+        if (dst != src) memcpy(dst, src, nbytes);
+        return;
+    }
+    /* 提取 Y 平面到 s_plane_r (借用 blur 平面; 单任务约定) */
+    for (uint32_t i = 0; i < w * h; i++) s_plane_r[i] = src[i * 2];
+
+    for (uint32_t y = 0; y < h; y++) {
+        uint32_t yt = (y == 0) ? 0 : y - 1;
+        uint32_t yb = (y == h - 1) ? y : y + 1;
+        const uint8_t *rt = s_plane_r + (size_t)yt * w;
+        const uint8_t *rm = s_plane_r + (size_t)y * w;
+        const uint8_t *rb = s_plane_r + (size_t)yb * w;
+        uint8_t *orow = dst + (size_t)y * w * 2;
+        const uint8_t *irow = src + (size_t)y * w * 2;
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t xl = (x == 0) ? 0 : x - 1;
+            uint32_t xr = (x == w - 1) ? x : x + 1;
+            int sum = rt[xl] + rt[x] + rt[xr] + rm[xl] + rm[x] + rm[xr] +
+                      rb[xl] + rb[x] + rb[xr];
+            uint8_t avg = s_avg_lut[sum];
+            int yv = avg + ((rm[x] - avg) * strength) / 100;
+            orow[x * 2] = clamp_u8(yv);
+            orow[x * 2 + 1] = irow[x * 2 + 1];    /* 色度原样保留 */
+        }
+    }
+}
+
+void hw2d_yuv_blend_circle(uint8_t *yuyv, uint32_t w, uint32_t h,
+                           int cx, int cy, int r, uint8_t alpha)
+{
+    if (cx - r < 0 || cx + r >= (int)w || cy - r < 0 || cy + r >= (int)h) {
+        return;                       /* 越界整圆裁剪 (与预览 blend 同策略) */
+    }
+    for (int y = cy - r; y <= cy + r; y++) {
+        int half = 0;
+        while ((half + 1) * (half + 1) + (y - cy) * (y - cy) <= r * r) half++;
+        int x0 = cx - half, x1 = cx + half;
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        for (int x = x0; x <= x1; x++) {
+            uint8_t *py = row + x * 2;
+            py[0] = (uint8_t)(py[0] + (((255 - py[0]) * alpha) >> 8));
+            uint8_t *pc = row + (x & ~1) * 2 + 1;      /* 本对 Cb */
+            pc[0] = (uint8_t)(pc[0] + (((128 - pc[0]) * alpha) >> 8));
+            pc[2] = (uint8_t)(pc[2] + (((128 - pc[2]) * alpha) >> 8));
+        }
+    }
+}
+
+void hw2d_yuv_extract_y(uint8_t *dst_gray, const uint8_t *src, uint32_t npix)
+{
+    for (uint32_t i = 0; i < npix; i++) dst_gray[i] = src[i * 2];
+}
+
+/* ================================================================== */
 /* 16bit 车道字节交换 (LE<->BE)                                        */
 /* ================================================================== */
 /* PVC_NO_PIE: QEMU 仿真等场景禁用 PIE 汇编 (指令仿真支持不确定), 走 C 路径 */
@@ -576,6 +706,8 @@ static struct {
     uint64_t us_copy;
     uint32_t n_fused;
     uint64_t us_fused;
+    uint32_t n_yuv;
+    uint64_t us_yuv;
 } s_stats;
 
 void hw2d_stats_reset(void)
@@ -613,6 +745,10 @@ void hw2d_stats_dump(void)
     if (s_stats.n_fused) {
         printf("[hw2d] scale2x_lut: %lu calls, avg %llu us\n",
                (unsigned long)s_stats.n_fused, s_stats.us_fused / s_stats.n_fused);
+    }
+    if (s_stats.n_yuv) {
+        printf("[hw2d] yuv2rgb_lut : %lu calls, avg %llu us\n",
+               (unsigned long)s_stats.n_yuv, s_stats.us_yuv / s_stats.n_yuv);
     }
 }
 
@@ -662,6 +798,15 @@ void hw2d_scale_stat(const uint16_t *src, uint32_t w_src, uint32_t h_src,
     hw2d_scale(src, w_src, h_src, dst, w_dst, h_dst);
     s_stats.n_scale++;
     s_stats.us_scale += HW2D_TIME_US() - t0;
+}
+
+void hw2d_yuv_filter_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t npix, const hw2d_yuv_luts_t *luts)
+{
+    uint32_t t0 = HW2D_TIME_US();
+    hw2d_yuv_filter_rgb565(dst, src, npix, luts);
+    s_stats.n_yuv++;
+    s_stats.us_yuv += HW2D_TIME_US() - t0;
 }
 
 void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,

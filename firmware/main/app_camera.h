@@ -17,16 +17,16 @@
 extern "C" {
 #endif
 
-/* 一帧 RGB565 数据 (缓冲在 PSRAM, 由 esp_camera DMA 填充) */
+/* 一帧 YUV422 (YCbYCr packed) 数据 (缓冲在 PSRAM, 由 esp_camera DMA 填充) */
 typedef struct {
-    const uint16_t *buf;   /* RGB565 帧数据 */
+    const uint16_t *buf;   /* YCbYCr 字节流 (2 字节/像素; 按字节访问) */
     uint32_t width;        /* 320 */
     uint32_t height;       /* 240 */
     uint32_t size;         /* 字节数 */
 } app_camera_frame_t;
 
 /**
- * @brief 初始化 GC0308 (QVGA 320x240 RGB565, 双缓冲 PSRAM, LATEST 抓帧)
+ * @brief 初始化 GC0308 (QVGA 320x240 YUV422, 双缓冲 PSRAM, LATEST 抓帧)
  * @note  必须在 LVGL / UI 创建完成后调用
  */
 esp_err_t app_camera_init(void);

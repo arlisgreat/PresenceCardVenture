@@ -67,3 +67,32 @@ size_t pvc_jpeg_encode(const uint16_t *rgb565, uint32_t w, uint32_t h,
     }
     return (size_t)out_len;
 }
+
+size_t pvc_jpeg_encode_yuv422(const uint8_t *yuyv, uint32_t w, uint32_t h,
+                              uint8_t quality, uint8_t *out, size_t out_cap)
+{
+    jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
+    cfg.width = (int)w;
+    cfg.height = (int)h;
+    cfg.src_type = JPEG_PIXEL_FORMAT_YCbYCr;   /* 传感器字节流直通 */
+    /* 422 与源精确匹配 (保真要求: 420 会垂直减半色度); q90 QVGA ~40-60KB */
+    cfg.subsampling = JPEG_SUBSAMPLE_422;
+    cfg.quality = quality;
+    cfg.task_enable = false;
+
+    jpeg_enc_handle_t h_enc = NULL;
+    if (jpeg_enc_open(&cfg, &h_enc) != JPEG_ERR_OK || !h_enc) {
+        ESP_LOGE(TAG, "yuv enc open failed (%lux%lu q%d)",
+                 (unsigned long)w, (unsigned long)h, quality);
+        return 0;
+    }
+    int out_len = 0;
+    jpeg_error_t ret = jpeg_enc_process(h_enc, yuyv, (int)(w * h * 2),
+                                        out, (int)out_cap, &out_len);
+    jpeg_enc_close(h_enc);
+    if (ret != JPEG_ERR_OK || out_len <= 0) {
+        ESP_LOGE(TAG, "yuv enc process failed ret=%d", (int)ret);
+        return 0;
+    }
+    return (size_t)out_len;
+}

@@ -94,6 +94,52 @@ int main(void)
         gcheck(line, W, "line");
     }
 
+    /* ---- YUV422 算子 (生产主路径) ---- */
+    {
+        static uint8_t yuyv[NPIX * 2], ybak[NPIX * 2];
+        static uint16_t rgbout[NPIX];
+        srand(31337);
+        for (size_t i = 0; i < sizeof(yuyv); i++) yuyv[i] = (uint8_t)rand();
+        memcpy(ybak, yuyv, sizeof(yuyv));
+
+        hw2d_yuv_luts_t idl, luts;
+        memset(&idl, 0, sizeof(idl));
+        hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_ORIGINAL), &idl);
+        /* 恒等表: 滤镜过后必须逐字节不变 */
+        hw2d_yuv_filter(yuyv, yuyv, NPIX, &idl);
+        CHECK(memcmp(yuyv, ybak, sizeof(yuyv)) == 0, "identity yuv filter changed data");
+
+        /* 黑白 (sat=0): 输出色度必须恒 128 */
+        memset(&luts, 0, sizeof(luts));
+        hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_BW), &luts);
+        hw2d_yuv_filter(yuyv, ybak, NPIX, &luts);
+        for (size_t i = 1; i < sizeof(yuyv); i += 2) {
+            if (yuyv[i] != 128) { CHECK(0, "bw chroma !=128 @%zu", i); break; }
+        }
+
+        /* 恒色帧: Y 磨皮后必须不变 (含色度保留) */
+        for (size_t i = 0; i < sizeof(yuyv); i += 4) {
+            yuyv[i] = 90; yuyv[i+1] = 100; yuyv[i+2] = 90; yuyv[i+3] = 160;
+        }
+        memcpy(ybak, yuyv, sizeof(yuyv));
+        hw2d_yuv_blur_y(yuyv, yuyv, W, H, 70);
+        CHECK(memcmp(yuyv, ybak, sizeof(yuyv)) == 0, "uniform blur_y changed");
+
+        /* blend_circle: 越界整圆裁剪 (不写内存); 合法圆提亮 Y */
+        hw2d_yuv_blend_circle(yuyv, W, H, -5, 10, 20, 200);
+        hw2d_yuv_blend_circle(yuyv, W, H, W - 1, H - 1, 8, 200);
+        CHECK(memcmp(yuyv, ybak, sizeof(yuyv)) == 0, "oob circle wrote");
+        hw2d_yuv_blend_circle(yuyv, W, H, W / 2, H / 2, 20, 255);
+        CHECK(yuyv[((size_t)(H / 2) * W + W / 2) * 2] > 200, "blend no lighten");
+
+        /* yuv->rgb565: 灰点 (128,128,128) 应转出近中灰 */
+        for (size_t i = 0; i < sizeof(yuyv); i++) yuyv[i] = 128;
+        hw2d_yuv_filter_rgb565(rgbout, yuyv, NPIX, &idl);
+        int r = (rgbout[0] >> 11) & 31, g = (rgbout[0] >> 5) & 63, b = rgbout[0] & 31;
+        CHECK(abs(r - 16) <= 1 && abs(g - 32) <= 2 && abs(b - 16) <= 1,
+              "gray convert got %d,%d,%d", r, g, b);
+    }
+
     /* ---- SOF 解析器: 随机与截断输入不越界、构造头正确解析 ---- */
     {
         uint8_t jbuf[512];

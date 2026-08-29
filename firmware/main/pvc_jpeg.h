@@ -24,6 +24,13 @@ extern "C" {
 size_t pvc_jpeg_encode(const uint16_t *rgb565, uint32_t w, uint32_t h,
                        uint8_t quality, uint8_t *out, size_t out_cap);
 
+/*
+ * YUV422 (YCbYCr packed, 传感器原生序) -> JPEG 直通编码:
+ * 零色彩空间往返, 编码器最优路径 (含旋转支持的唯一格式)。
+ */
+size_t pvc_jpeg_encode_yuv422(const uint8_t *yuyv, uint32_t w, uint32_t h,
+                              uint8_t quality, uint8_t *out, size_t out_cap);
+
 /* 快速解析 JPEG SOF 尺寸 (防异常尺寸图解码溢出); 解析失败返回 false */
 bool pvc_jpeg_dims(const uint8_t *jpg, size_t len, uint32_t *w, uint32_t *h);
 

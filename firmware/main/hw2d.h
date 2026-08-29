@@ -140,6 +140,53 @@ void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
                            uint32_t dw, uint32_t dh, const hw2d_filter_t *f);
 
 /* ------------------------------------------------------------------ */
+/* YUV422 (YCbYCr packed) 算子 —— 全链路 YUV 架构                       */
+/*   采集/滤镜/磨皮/编码全程留在传感器原生 YUV 域 (零 RGB565 量化损失), */
+/*   RGB565 仅作为显示边界。字节序: Y0 Cb Y1 Cr (GC0308 寄存器注释 =    */
+/*   esp_new_jpeg 的 JPEG_PIXEL_FORMAT_YCbYCr, 直通编码器)。            */
+/*   约定: npix 为像素数且必须为偶数 (两像素共享一组色度)。             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * YUV 域滤镜查表 (调用方持有, 消除跨核共享静态表竞争):
+ *   y[]  承载 亮度偏置+对比度+综合增益; cb[]/cr[] 承载 饱和度缩放+色调偏移
+ *   (暖/冷调由 gain_r/gain_b 差值映射为 Cr/Cb 偏移)。sat=0 时 cb/cr 恒 128。
+ */
+typedef struct {
+    uint8_t y[256];
+    uint8_t cb[256];
+    uint8_t cr[256];
+    hw2d_filter_t cached;    /* 参数快照, hw2d_yuv_build_luts 按需重建 */
+    bool valid;
+} hw2d_yuv_luts_t;
+
+/* 按 f 重建 luts (与 cached 相同则跳过); luts 由调用方零初始化 */
+void hw2d_yuv_build_luts(const hw2d_filter_t *f, hw2d_yuv_luts_t *luts);
+
+/* YUYV -> YUYV 滤镜 (拍照链); dst 可等于 src (原地) */
+void hw2d_yuv_filter(uint8_t *dst, const uint8_t *src, uint32_t npix,
+                     const hw2d_yuv_luts_t *luts);
+
+/* YUYV -> RGB565(LE) 滤镜+转换融合单遍 (预览显示边界; BT.601 全范围) */
+void hw2d_yuv_filter_rgb565(uint16_t *dst, const uint8_t *src, uint32_t npix,
+                            const hw2d_yuv_luts_t *luts);
+void hw2d_yuv_filter_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t npix, const hw2d_yuv_luts_t *luts);
+
+/* YUYV 磨皮: 仅 3x3 平滑 Y 平面 (经典磨皮: 平亮度保色度, 算量 1/3)。
+ * dst 可等于 src; 内部借用 blur 平面缓冲 (单任务调用, 与 blur3x3 互斥) */
+void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,
+                     uint8_t strength);
+
+/* YUYV 提亮混合圆 (贴纸合成进照片): 圆内 Y 向 255、色度向 128 按 alpha 靠拢;
+ * 圆心/半径超出画面时整圆裁剪 */
+void hw2d_yuv_blend_circle(uint8_t *yuyv, uint32_t w, uint32_t h,
+                           int cx, int cy, int r, uint8_t alpha);
+
+/* YUYV 提取 Y 平面 (人脸检测 GRAY 输入等) */
+void hw2d_yuv_extract_y(uint8_t *dst_gray, const uint8_t *src, uint32_t npix);
+
+/* ------------------------------------------------------------------ */
 /* 16bit 车道字节交换 (RGB565 小端 <-> 大端)                            */
 /* ------------------------------------------------------------------ */
 

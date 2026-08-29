@@ -84,7 +84,7 @@ static const char *TAG = "ui_camera";
 #define PSRAM_FREE(p)    heap_caps_free(p)
 
 /* 前置声明 (C 语言无 lambda, 静态函数需在使用前声明) */
-static void update_thumbs(const uint16_t *src);
+static void update_thumbs(const uint8_t *src);
 static void update_status(void);
 static void close_panel(void);
 static void panel_done_cb(lv_event_t *e);
@@ -114,6 +114,10 @@ static int s_sticker = -1;                 /* -1 = 无贴纸 */
 
 /* 当前生效滤镜参数 (基础滤镜 + 美白叠加); hw2d 按参数内容判断 LUT 重建 */
 static hw2d_filter_t s_active_filter;
+static hw2d_yuv_luts_t s_yuv_luts;               /* 预览 YUV 表 (core0 专用) */
+static hw2d_yuv_luts_t s_thumb_luts[HW2D_FILTER_MAX];  /* 滤镜条 6 组 */
+static hw2d_yuv_luts_t s_id_luts;                /* 恒等表 (人脸帧转换用) */
+static uint16_t *s_face_rgb;                     /* 人脸检测 RGB565 帧 */
 
 /* 滤镜缩略图 (22x22, 6 个, 与面板共享) */
 static uint16_t *s_thumb_raw;              /* 缩放原图 22x22 */
@@ -213,8 +217,8 @@ static void blend_circle(uint16_t *canvas, int cx, int cy, int r, uint8_t alpha)
     }
 }
 
-/* 贴纸与缩略图刷新 (canvas 已含滤镜后画面; thumb_src 为未滤镜 QVGA 或 NULL) */
-static void render_overlays(const uint16_t *thumb_src)
+/* 贴纸与缩略图刷新 (canvas 已含滤镜后画面; thumb_src 为未滤镜 YUYV 或 NULL) */
+static void render_overlays(const uint8_t *thumb_src)
 {
     /* 贴纸 (SRC_OVER 硬件混合): 有人脸框则跟脸放置, 否则固定位置 */
     if (s_sticker >= 0 && s_sticker < 6) {
@@ -251,12 +255,18 @@ static void preview_timer_cb(lv_timer_t *t)
     uint32_t t0 = (uint32_t)esp_timer_get_time();
     bool thumb_due = s_thumb_dirty || ((++s_frame_cnt & 7u) == 0);
     if (f->width == UI_W && f->height == UI_H) {
-        /* QVGA 直通: LUT 滤镜零拷贝直读 DMA 帧, 无缩放 */
-        hw2d_filter_lut_stat(s_canvas_buf, f->buf, UI_W * UI_H, &s_active_filter);
+        /* QVGA YUV422 直通: YUV 域滤镜 + RGB565 转换融合单遍 (显示边界) */
+        const uint8_t *yuyv = (const uint8_t *)f->buf;
+        hw2d_yuv_build_luts(&s_active_filter, &s_yuv_luts);
+        hw2d_yuv_filter_rgb565_stat(s_canvas_buf, yuyv, UI_W * UI_H, &s_yuv_luts);
         if (thumb_due) {
-            if (s_sticker >= 0) pvc_face_submit(f->buf);
+            if (s_sticker >= 0 && s_face_rgb) {
+                /* 人脸检测吃 RGB565: 恒等表转换一帧 (每 ~320ms) */
+                hw2d_yuv_filter_rgb565(s_face_rgb, yuyv, UI_W * UI_H, &s_id_luts);
+                pvc_face_submit(s_face_rgb);
+            }
             s_thumb_dirty = false;
-            render_overlays(f->buf);       /* 缩略图直接用未滤镜原帧 */
+            render_overlays(yuyv);         /* 缩略图用未滤镜 YUYV 原帧 */
         } else {
             render_overlays(NULL);
         }
@@ -293,15 +303,27 @@ static void preview_timer_cb(lv_timer_t *t)
 }
 
 /* ================= 滤镜缩略图 (22x22) ================= */
-static void update_thumbs(const uint16_t *src)
+static void update_thumbs(const uint8_t *src)
 {
     if (!s_thumb_raw || !s_thumb_bufs[0]) return;
 
-    hw2d_scale_stat(src, UI_W, UI_H, s_thumb_raw, THUMB_SZ, THUMB_SZ);
-
+    /* 点采样 YUYV 到 22x22 小帧 (对为单位取样, 保持 YCbYCr 结构) */
+    uint8_t *t = (uint8_t *)s_thumb_raw;          /* 复用: 22*22*2 字节恰好 */
+    for (int y = 0; y < THUMB_SZ; y++) {
+        uint32_t sy = (uint32_t)y * UI_H / THUMB_SZ;
+        const uint8_t *row = src + (size_t)sy * UI_W * 2;
+        for (int x = 0; x < THUMB_SZ; x += 2) {
+            uint32_t sx = ((uint32_t)x * UI_W / THUMB_SZ) & ~1u;
+            const uint8_t *pp = row + sx * 2;
+            uint8_t *op = t + ((size_t)y * THUMB_SZ + (size_t)x) * 2;
+            op[0] = pp[0]; op[1] = pp[1]; op[2] = pp[2]; op[3] = pp[3];
+        }
+    }
     for (int i = 0; i < HW2D_FILTER_MAX; i++) {
-        const hw2d_filter_t *f = hw2d_filter_get((hw2d_filter_id_t)i);
-        hw2d_filter_lut_stat(s_thumb_bufs[i], s_thumb_raw, THUMB_SZ * THUMB_SZ, f);
+        hw2d_yuv_build_luts(hw2d_filter_get((hw2d_filter_id_t)i),
+                            &s_thumb_luts[i]);
+        hw2d_yuv_filter_rgb565(s_thumb_bufs[i], t, THUMB_SZ * THUMB_SZ,
+                               &s_thumb_luts[i]);
         if (s_thumb_canvases[i]) lv_obj_invalidate(s_thumb_canvases[i]);
     }
 }
@@ -386,6 +408,9 @@ typedef struct {
     hw2d_filter_t filter;      /* 快门时刻的合成滤镜参数 (含美白) */
     int           smooth;
     int           white;
+    int           sticker;     /* 贴纸合成进照片 (-1 = 无) */
+    pvc_face_box_t fbox;       /* 快门时刻人脸框快照 (无效则固定位) */
+    bool          fbox_valid;
     hw2d_filter_id_t fid;
     uint32_t      seq;
     int64_t       t_shutter;
@@ -424,8 +449,7 @@ static void snap_release(int slot)
     taskEXIT_CRITICAL(&s_pool_mux);
 }
 
-/* worker 专属复用缓冲 (串行处理, 每类一份): 磨皮工作区 / 编码输出 */
-static uint16_t *s_wk_work;                     /* CAP_BYTES */
+/* worker 专属复用缓冲: 编码输出 (YUV 磨皮/滤镜均原地, 无需工作区) */
 static uint8_t  *s_wk_enc;                      /* 编码输出 */
 #define WK_ENC_CAP (128 * 1024)                 /* QVGA q90 实测 ~30-60KB */
 
@@ -444,17 +468,28 @@ static void photo_worker(void *arg)
         uint32_t pw = job.w, ph = job.h;
         uint32_t pbytes = pw * ph * 2;
 
-        /* 磨皮 + 精确滤镜 (复用缓冲; s_wk_work 缺失时降级存原图) */
-        if (s_wk_work) {
-            if (job.smooth > 0) {
-                hw2d_blur3x3(s_wk_work, job.snap, pw, ph, (uint8_t)job.smooth);
-            } else {
-                memcpy(s_wk_work, job.snap, pbytes);
-            }
-        }
+        /* YUV 域: Y 平面磨皮 -> Y/Cb/Cr 查表滤镜 (worker 自持表, 与预览无竞争)
+         * -> 贴纸合成 (亮度提亮圆, 位置取快门时刻人脸框) */
+        uint8_t *yuyv = (uint8_t *)job.snap;
+        static hw2d_yuv_luts_t s_wk_luts;      /* worker 单任务专用 */
+        hw2d_yuv_blur_y(yuyv, yuyv, pw, ph, (uint8_t)job.smooth);
         int64_t t_blur = esp_timer_get_time();
-        if (s_wk_work) {
-            hw2d_apply_filter_exact(job.snap, s_wk_work, pw * ph, &job.filter);
+        hw2d_yuv_build_luts(&job.filter, &s_wk_luts);
+        hw2d_yuv_filter(yuyv, yuyv, pw * ph, &s_wk_luts);
+        if (job.sticker >= 0) {                /* 贴纸进照片 (与预览同几何) */
+            int bx = 60, by = 40, bw2 = 200, bh = 120, rr = 21;
+            if (job.fbox_valid) {
+                bx = job.fbox.x; by = job.fbox.y;
+                bw2 = job.fbox.w; bh = job.fbox.h;
+                rr = bw2 / 6;
+                if (rr < 8) rr = 8;
+                if (rr > 32) rr = 32;
+            }
+            int ey = by - bh / 10;
+            hw2d_yuv_blend_circle(yuyv, pw, ph, bx + bw2 / 4, ey, rr, 170);
+            hw2d_yuv_blend_circle(yuyv, pw, ph, bx + (bw2 * 3) / 4, ey, rr, 170);
+            hw2d_yuv_blend_circle(yuyv, pw, ph, bx + bw2 / 2, by - bh / 6,
+                                  (rr * 2) / 3, 200);
         }
         int64_t t_filter = esp_timer_get_time();
 
@@ -466,7 +501,7 @@ static void photo_worker(void *arg)
         size_t alen = 0;
         if (s_wk_enc) {
             /* QVGA 统一后相册与上传是同一份 q90 编码, 一次编码两用 */
-            alen = pvc_jpeg_encode(job.snap, pw, ph, 90, s_wk_enc, WK_ENC_CAP);
+            alen = pvc_jpeg_encode_yuv422(yuyv, pw, ph, 90, s_wk_enc, WK_ENC_CAP);
             if (alen) {
                 mkdir("/sdcard/DCIM", 0755);
                 write_file(path, s_wk_enc, alen);
@@ -487,8 +522,8 @@ static void photo_worker(void *arg)
             } else {
                 static const uint8_t k_qualities[] = { 80, 60 };
                 for (unsigned qi = 0; qi < sizeof(k_qualities); qi++) {
-                    jlen = pvc_jpeg_encode(job.snap, pw, ph, k_qualities[qi],
-                                           s_wk_enc, WK_ENC_CAP);
+                    jlen = pvc_jpeg_encode_yuv422(yuyv, pw, ph, k_qualities[qi],
+                                                  s_wk_enc, WK_ENC_CAP);
                     if (jlen && jlen <= 100 * 1024) break;
                 }
             }
@@ -573,10 +608,12 @@ static void take_photo(void)
         .filter = s_active_filter,          /* 按值快照, 与 UI 后续修改解耦 */
         .smooth = s_smooth,
         .white = s_white,
+        .sticker = s_sticker,
         .fid = s_filter,
         .seq = s_seq,
         .t_shutter = t0,
     };
+    job.fbox_valid = (s_sticker >= 0) && pvc_face_latest(&job.fbox);
     hw2d_copy(snap, f->buf, job.w * job.h * 2);
     app_camera_release();
     job.grab_ms = (int)((esp_timer_get_time() - t0) / 1000);
@@ -1523,8 +1560,9 @@ void ui_beauty_camera_create(void)
     pvc_sound_init();
     if (!s_caption_sem) s_caption_sem = xSemaphoreCreateBinary();
     for (int i = 0; i < SNAP_POOL_N; i++) s_snap_pool[i] = PSRAM_MALLOC(CAP_BYTES);
-    s_wk_work = PSRAM_MALLOC(CAP_BYTES);
     s_wk_enc  = PSRAM_MALLOC(WK_ENC_CAP);
+    s_face_rgb = PSRAM_MALLOC(FRAME_BYTES);
+    hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_ORIGINAL), &s_id_luts);
     s_photo_q = xQueueCreate(2, sizeof(photo_job_t));
     if (s_photo_q) {
         xTaskCreatePinnedToCore(photo_worker, "photo_wk", 8192, NULL, 3, NULL, 1);
