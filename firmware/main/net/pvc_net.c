@@ -5,6 +5,7 @@
 #include "pvc_upload.h"
 #include "pvc_feed.h"
 #include "pvc_config.h"
+#include "pvc_ota.h"
 #include "pvc_trace.h"
 
 #include <string.h>
@@ -45,6 +46,12 @@ static void set_state(pvc_net_state_t st, const char *detail)
 }
 
 pvc_net_state_t pvc_net_state(void) { return s_state; }
+
+/* OTA 进度 -> 状态栏短文案 (net_task 上下文) */
+static void ota_notify(const char *msg)
+{
+    if (s_ui.status) s_ui.status(s_state, msg);
+}
 
 /* ---------------- WiFi STA ---------------- */
 static bool s_provisioning;    /* BLE 配网期间抑制断线状态刷新 */
@@ -196,6 +203,8 @@ static void net_task(void *arg)
             if (fresh >= 0) {
                 last_feed_poll = now;
                 s_feed_synced = true;
+                /* 自检通过 (wifi+认证+state+feed 全通): 新固件落账防回滚 */
+                pvc_ota_mark_valid();
                 if (s_ui.feed_update) {
                     pvc_feed_item_t tmp[PVC_FEED_MAX];
                     s_ui.feed_update(pvc_feed_snapshot(tmp, PVC_FEED_MAX), fresh,
@@ -209,6 +218,15 @@ static void net_task(void *arg)
         if (pvc_config_process_ack() == PVC_FEED_AUTH) {
             pvc_store_clear_token();
             continue;
+        }
+
+        /* OTA (§3.1 fw_latest): 照片队列已排空才下载, 不与上传抢带宽;
+         * 完成后由 pvc_power 在闲置入睡时改为重启生效 */
+        if (pvc_ota_pending() && pvc_upload_depth() == 0) {
+            if (pvc_ota_process(ota_notify) == PVC_FEED_AUTH) {
+                pvc_store_clear_token();
+                continue;
+            }
         }
 
         /* 等新照片/feed 信号或周期唤醒 */
@@ -226,7 +244,10 @@ void pvc_net_signal_feed(void)
 
 bool pvc_net_synced(void)
 {
-    return s_state == PVC_NET_ONLINE && s_feed_synced && pvc_upload_depth() == 0;
+    /* OTA 待下载/下载中不算同步完 (防 power 在下载启动前的窗口期断电);
+     * reboot_pending 不算: 写好槽后正该走入睡路径 -> 重启生效 */
+    return s_state == PVC_NET_ONLINE && s_feed_synced &&
+           pvc_upload_depth() == 0 && !pvc_ota_pending() && !pvc_ota_busy();
 }
 
 /* ---------------- 公共 API ---------------- */
@@ -238,6 +259,9 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
 
     esp_err_t err = pvc_store_init();
     if (err != ESP_OK) return err;
+
+    /* 识别 OTA 回滚 / 待验证状态 (依赖 NVS, 须在 store_init 之后) */
+    pvc_ota_boot_check();
 
     /* TLS 握手约需 40KB 堆 (§6)。栈 16KB: fetch_state 栈上 2KB 响应缓冲
      * + feed 槽位数组 ~1.6KB + mbedTLS 握手栈开销, 8KB 有溢出风险 */

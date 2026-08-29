@@ -58,3 +58,8 @@ CONFIG_HEAP_POISONING_COMPREHENSIVE=y
 
 # --- 日志 ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- OTA (docs/02 §3.1 fw_latest) ---
+# 回滚保护: 新固件首次启动为 PENDING_VERIFY, 自检 (首次 feed 同步成功) 后
+# pvc_ota_mark_valid() 落账; 未落账即重启/崩溃则 bootloader 自动回滚旧槽
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

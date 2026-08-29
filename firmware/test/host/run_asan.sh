@@ -22,7 +22,7 @@ if [ "$1" = "tsan" ]; then
   "$OUT-thr"
 else
   "${CC:-cc}" $CFLAGS -o "$OUT-hw2d" test/host/test_hw2d.c main/hw2d.c
-  "${CC:-cc}" $CFLAGS -o "$OUT-pipe" test/host/test_pipeline.c main/hw2d.c main/pvc_jpeg_dims.c
+  "${CC:-cc}" $CFLAGS -o "$OUT-pipe" test/host/test_pipeline.c main/hw2d.c main/pvc_jpeg_dims.c main/net/pvc_ota_util.c
   "$OUT-hw2d"
   "$OUT-pipe"
 fi

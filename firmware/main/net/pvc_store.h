@@ -31,6 +31,14 @@ uint32_t pvc_store_next_photo_seq(void);   /* 本次启动内单调递增, 从 1
 const char *pvc_store_last_cfg(void);
 void        pvc_store_set_last_cfg(const char *cfg_id);
 
+/* OTA (§3.1 fw_latest): 坏版本黑名单 + 待验证版本 (回滚归因)。
+ * 未存返回 ""; 传 NULL/"" 即清除。 */
+#define PVC_FW_VER_MAX 32
+const char *pvc_store_ota_bad(void);
+void        pvc_store_set_ota_bad(const char *ver);
+const char *pvc_store_ota_try(void);
+void        pvc_store_set_ota_try(const char *ver);
+
 /* feed 的 If-None-Match etag (§3.2); 未存返回 ""。
  * server 的 etag 为 W/"feed-<全部photo_id>" — Prisma 模式 8 个 UUID 约 300 字节,
  * 缓冲必须放大到能整存, 截断会导致 304 永不命中。 */

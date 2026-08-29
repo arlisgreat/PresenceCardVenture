@@ -52,6 +52,7 @@ idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                             "net/pvc_net.c" "net/pvc_store.c" "net/pvc_http.c"
                             "net/pvc_pair.c" "net/pvc_upload.c" "net/pvc_prov.c"
                             "net/pvc_feed.c" "net/pvc_config.c"
+                            "net/pvc_ota.c" "net/pvc_ota_util.c"
                        INCLUDE_DIRS "." "net"
                        EMBED_FILES "ccd_assets/ccd_f100.l3d"
                                    "ccd_assets/ccd_z30.l3d"
@@ -59,4 +60,5 @@ idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                                    "ccd_assets/ccd_m532.l3d"
                        PRIV_REQUIRES esp_wifi esp_netif esp_event nvs_flash
                                      esp_http_client esp-tls mbedtls json esp_timer
+                                     app_update
                                      wifi_provisioning bt driver esp_driver_i2c)

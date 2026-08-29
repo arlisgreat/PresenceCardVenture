@@ -362,6 +362,43 @@ def run_checks(ev, http, sleeps, boots, panics):
               f"max={max(ms)}ms 有脸帧占比 {100*hit//len(faces)}%"
               + (" (avg>300ms, 跟随会迟滞)" if v == "WARN" else ""))
 
+    # C20 OTA: 下载闭环 / 校验失败拉黑 / 回滚
+    starts = evs("ota_start")
+    dones = evs("ota_done")
+    errs = evs("ota_err")
+    rollbacks = evs("ota_rollback")
+    valids = evs("ota_valid")
+    if starts or dones or errs or rollbacks:
+        fatal = [d for d in errs if d.get("fatal") == "1"]
+        if rollbacks:
+            r.add("C20", "WARN",
+                  f"发生 OTA 回滚 {len(rollbacks)} 次 (新固件自检未过, 已拉黑): "
+                  + ",".join(d.get("bad", "?") for d in rollbacks))
+        elif len(dones) < len(starts) and not errs:
+            r.add("C20", "FAIL",
+                  f"ota_start {len(starts)} 次但 done {len(dones)}/err 0 "
+                  "(下载中途断电/挂死?)")
+        elif fatal:
+            r.add("C20", "WARN",
+                  f"OTA 镜像级失败 {len(fatal)} 次 (md5/校验/超槽, 已拉黑该版本)",
+                  [f"stage={d.get('stage')} err={d.get('err')}" for d in fatal[:5]])
+        elif dones:
+            boots = [d for d in evs("ota_boot") if d.get("state") == "1"]
+            if boots and not valids:
+                r.add("C20", "WARN",
+                      "新固件以 PENDING_VERIFY 启动但未见 ota_valid "
+                      "(日志截断, 或自检未完成 -> 下次重启会回滚)")
+            else:
+                r.add("C20", "PASS",
+                      f"OTA 闭环 {len(dones)} 次"
+                      + (f", 新固件已落账 (ota_valid ×{len(valids)})" if valids else ""))
+        else:
+            r.add("C20", "WARN",
+                  f"OTA 尝试 {len(starts)} 次全部瞬时失败 (未拉黑, 会重试)",
+                  [f"stage={d.get('stage')} err={d.get('err')}" for d in errs[:5]])
+    else:
+        r.add("C20", "SKIP", "无 OTA 事件 (server 未下发 fw_latest, 正常)")
+
     # C12 延迟统计 (信息项)
     lat = {}
     for _, d in http:

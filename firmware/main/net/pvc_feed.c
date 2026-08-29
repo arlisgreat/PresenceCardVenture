@@ -1,5 +1,6 @@
 #include "pvc_feed.h"
 #include "pvc_config.h"
+#include "pvc_ota.h"
 #include "pvc_http.h"
 #include "pvc_store.h"
 #include "pvc_trace.h"
@@ -171,6 +172,7 @@ static int fetch_state(void)
     const cJSON *ju = cJSON_GetObjectItem(j, "unseen_count");
     if (cJSON_IsNumber(ju)) unseen = ju->valueint;
     pvc_config_handle_state((const struct cJSON *)j);
+    pvc_ota_handle_state((const struct cJSON *)j);
     cJSON_Delete(j);
     return unseen;
 }

@@ -13,6 +13,7 @@
 #include <string.h>
 #include "hw2d.h"
 #include "pvc_jpeg.h"
+#include "net/pvc_ota_util.h"
 
 #define W 320
 #define H 240
@@ -206,6 +207,50 @@ int main(void)
         CHECK(pvc_jpeg_dims(sof, sizeof(sof), &jw, &jh) &&
               jw == 320 && jh == 240, "sof parse got %ux%u", jw, jh);
         CHECK(!pvc_jpeg_dims(sof, 9, &jw, &jh), "truncated should fail");
+    }
+
+    /* ---- OTA 纯逻辑: 语义版本比较 + MD5 hex 解析 (含模糊) ---- */
+    {
+        static const struct { const char *a, *b; int want; } vc[] = {
+            { "0.1.2", "0.1.2", 0 },   { "0.2.0", "0.1.9", 1 },
+            { "0.1.2", "0.2.0", -1 },  { "1.0.0", "0.9.9", 1 },
+            { "0.2.0", "0.2.0-dev", 1 },          /* 正式 > 预发布 */
+            { "0.2.0-dev", "0.2.0-rc1", -1 },     /* 双后缀 strcmp */
+            { "0.2", "0.2.0", 0 },                /* 缺段按 0 */
+            { "10.0.0", "9.0.0", 1 },             /* 数值而非字典序 */
+            { "abc", "0.0.0", -1 },   /* 垃圾串=0.0.0+后缀, 恒小于合法版本 */
+            { "", NULL, 0 },
+        };
+        for (size_t i = 0; i < sizeof(vc) / sizeof(vc[0]); i++) {
+            int got = pvc_semver_cmp(vc[i].a, vc[i].b);
+            got = got < 0 ? -1 : (got > 0 ? 1 : 0);
+            CHECK(got == vc[i].want, "semver %s vs %s: got %d want %d",
+                  vc[i].a ? vc[i].a : "(null)", vc[i].b ? vc[i].b : "(null)",
+                  got, vc[i].want);
+        }
+
+        uint8_t md5[16];
+        CHECK(pvc_md5_hex_parse("d41d8cd98f00b204e9800998ecf8427e", md5) == 0 &&
+              md5[0] == 0xd4 && md5[15] == 0x7e, "md5 parse valid");
+        CHECK(pvc_md5_hex_parse("D41D8CD98F00B204E9800998ECF8427E", md5) == 0 &&
+              md5[0] == 0xd4, "md5 parse uppercase");
+        CHECK(pvc_md5_hex_parse("d41d8cd98f00b204e9800998ecf8427", md5) != 0,
+              "md5 short must fail");
+        CHECK(pvc_md5_hex_parse("g41d8cd98f00b204e9800998ecf8427e", md5) != 0,
+              "md5 nonhex must fail");
+        CHECK(pvc_md5_hex_parse(NULL, md5) != 0, "md5 null must fail");
+
+        /* 模糊: 随机串比较/解析只要求不越界不挂 (sanitizer 兜底) */
+        char fz[40];
+        for (int it = 0; it < FUZZ_ITERS; it++) {
+            srand(31000 + it);
+            size_t n = (size_t)(rand() % (sizeof(fz) - 1));
+            for (size_t i = 0; i < n; i++) fz[i] = (char)(rand() % 255 + 1);
+            fz[n] = '\0';
+            pvc_semver_cmp(fz, "0.2.0");
+            pvc_semver_cmp(fz, fz);
+            pvc_md5_hex_parse(fz, md5);
+        }
     }
 
     gfree(frame); gfree(canvas); gfree(work); gfree(snap);

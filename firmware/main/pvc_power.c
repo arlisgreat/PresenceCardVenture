@@ -17,6 +17,7 @@
 #include "pvc_clock.h"
 #include "pvc_trace.h"
 #include "net/pvc_net.h"
+#include "net/pvc_ota.h"
 #include "net/pvc_upload.h"
 
 static const char *TAG = "pvc_power";
@@ -48,6 +49,16 @@ static bool get_inactive(uint32_t *out)
 
 static void enter_sleep(const char *reason)
 {
+    /* 新固件已写好槽: 入睡时机 = 用户不在用, 重启生效代替睡眠
+     * (重启后按唤醒原因走正常开机, 用户可见新版本) */
+    if (pvc_ota_reboot_pending()) {
+        printf("[FW] OTA_REBOOT reason=%s uptime_ms=%lu\n", reason,
+               (unsigned long)(esp_timer_get_time() / 1000));
+        PVC_EV("ota_reboot reason=%s", reason);
+        app_camera_shutdown();
+        esp_restart();
+    }
+
     /* 联调日志: 全栈据此核对 "单次唤醒 <20s 在线" (§6) */
     printf("[FW] SLEEP reason=%s uptime_ms=%lu queue=%d synced=%d\n",
            reason, (unsigned long)(esp_timer_get_time() / 1000),
@@ -109,6 +120,9 @@ static void power_task(void *arg)
         pvc_net_state_t st = pvc_net_state();
         /* 配网 / 配对中用户正在跟屏幕交互, 不休眠 */
         bool interactive = (st == PVC_NET_PROVISIONING || st == PVC_NET_PAIRING);
+
+        /* OTA 下载中不得断电 (静默唤醒 45s 硬限也让位, 下载自带 30s 超时兜底) */
+        if (pvc_ota_busy()) continue;
 
         uint32_t idle = 0;
         if (!get_inactive(&idle)) continue;
