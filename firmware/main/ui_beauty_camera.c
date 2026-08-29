@@ -353,6 +353,28 @@ static bool write_file(const char *path, const uint8_t *data, size_t len)
  * 选能放进 maxw x maxh 的最小缩放档, 缩略图无需全尺寸解码 (快 4-10 倍)。
  * out 容量须 >= maxw x maxh x 2 字节; 实际尺寸经 ow/oh 出参返回。
  */
+/* 内存版: JPEG 缓冲 -> RGB565 (相册 PSRAM 兜底与文件路径共用) */
+static int decode_jpg_565(const uint8_t *jbuf, size_t sz, uint16_t *out,
+                          uint32_t maxw, uint32_t maxh,
+                          uint32_t *ow, uint32_t *oh)
+{
+    uint32_t w = 0, h = 0;
+    int s;
+    if (!pvc_jpeg_dims(jbuf, sz, &w, &h)) return -1;
+    for (s = 0; s <= 3; s++) {
+        if ((w >> s) <= maxw && (h >> s) <= maxh) break;
+    }
+    if (s > 3) return -1;
+
+    /* jpg2rgb565 输出小端 RGB565: 直接解码进目标缓冲, 无需中转/交换 */
+    if (!jpg2rgb565(jbuf, sz, (uint8_t *)out, (esp_jpeg_image_scale_t)s)) {
+        return -1;
+    }
+    *ow = w >> s;
+    *oh = h >> s;
+    return 0;
+}
+
 static int load_jpg_565(const char *path, uint16_t *out, uint32_t maxw,
                         uint32_t maxh, uint32_t *ow, uint32_t *oh)
 {
@@ -370,23 +392,50 @@ static int load_jpg_565(const char *path, uint16_t *out, uint32_t maxw,
     }
     fclose(f);
 
-    uint32_t w = 0, h = 0;
-    int s;
-    if (!pvc_jpeg_dims(jbuf, (size_t)sz, &w, &h)) { PSRAM_FREE(jbuf); return -1; }
-    for (s = 0; s <= 3; s++) {
-        if ((w >> s) <= maxw && (h >> s) <= maxh) break;
-    }
-    if (s > 3) { PSRAM_FREE(jbuf); return -1; }
-    uint32_t dw = w >> s, dh = h >> s;
-
-    /* jpg2rgb565 输出小端 RGB565: 直接解码进目标缓冲, 无需中转/交换 */
-    bool ok = jpg2rgb565(jbuf, (size_t)sz, (uint8_t *)out,
-                         (esp_jpeg_image_scale_t)s);
+    int rc = decode_jpg_565(jbuf, (size_t)sz, out, maxw, maxh, ow, oh);
     PSRAM_FREE(jbuf);
-    if (!ok) return -1;
-    *ow = dw;
-    *oh = dh;
-    return 0;
+    return rc;
+}
+
+/* ---------------- 无 SD 卡相册兜底: 最近照片 JPEG 存 PSRAM 环 ----------------
+ * worker (core1) 写入 / LVGL 任务读取: 互斥锁保护指针与解码期间的缓冲生命期 */
+static uint8_t *s_ram_jpg[MAX_ALBUM_ITEMS];
+static size_t   s_ram_len[MAX_ALBUM_ITEMS];
+static int s_ram_head, s_ram_cnt;          /* head = 下一写位 */
+static SemaphoreHandle_t s_ram_mtx;
+
+static void ram_album_push(const uint8_t *jpg, size_t len)
+{
+    if (!s_ram_mtx) s_ram_mtx = xSemaphoreCreateMutex();
+    if (!s_ram_mtx) return;
+    uint8_t *copy = PSRAM_MALLOC(len);
+    if (!copy) return;
+    memcpy(copy, jpg, len);
+    xSemaphoreTake(s_ram_mtx, portMAX_DELAY);
+    if (s_ram_jpg[s_ram_head]) PSRAM_FREE(s_ram_jpg[s_ram_head]);
+    s_ram_jpg[s_ram_head] = copy;
+    s_ram_len[s_ram_head] = len;
+    s_ram_head = (s_ram_head + 1) % MAX_ALBUM_ITEMS;
+    if (s_ram_cnt < MAX_ALBUM_ITEMS) s_ram_cnt++;
+    xSemaphoreGive(s_ram_mtx);
+}
+
+/* 第 i 新的 RAM 照片解码 (i=0 最新); 成功 0 */
+static int ram_album_decode(int i, uint16_t *out, uint32_t maxw, uint32_t maxh,
+                            uint32_t *ow, uint32_t *oh)
+{
+    if (!s_ram_mtx) return -1;
+    int rc = -1;
+    xSemaphoreTake(s_ram_mtx, portMAX_DELAY);
+    if (i >= 0 && i < s_ram_cnt) {
+        int slot = (s_ram_head - 1 - i + 2 * MAX_ALBUM_ITEMS) % MAX_ALBUM_ITEMS;
+        if (s_ram_jpg[slot]) {
+            rc = decode_jpg_565(s_ram_jpg[slot], s_ram_len[slot], out,
+                                maxw, maxh, ow, oh);
+        }
+    }
+    xSemaphoreGive(s_ram_mtx);
+    return rc;
 }
 
 /* ================= 上传 (Presence Card 规范 §2) ================= */
@@ -536,7 +585,10 @@ static void photo_worker(void *arg)
             alen = pvc_jpeg_encode_yuv422(yuyv, pw, ph, 90, s_wk_enc, WK_ENC_CAP);
             if (alen) {
                 mkdir("/sdcard/DCIM", 0755);
-                write_file(path, s_wk_enc, alen);
+                if (!write_file(path, s_wk_enc, alen)) {
+                    /* 无 SD 卡: 相册兜底进 PSRAM 环 (最近 6 张) */
+                    ram_album_push(s_wk_enc, alen);
+                }
             }
         }
         int64_t t_save = esp_timer_get_time();
@@ -659,6 +711,10 @@ static void take_photo(void)
     }
     s_seq++;
     /* 磨皮/滤镜/存卡/编码/上传由 core1 worker 异步完成, 预览立即恢复 */
+
+    /* 拍后 6s 预设配文 (worker 编码后等 s_caption_sem 信箱):
+     * 不弹面板 worker 也只是白等 6s 后无配文上传 (真机曾遗漏此调用) */
+    open_caption_panel();
 }
 
 /* ================= 预设配文面板 (拍后 6s 内可选) ================= */
@@ -878,6 +934,7 @@ static uint16_t *s_album_bufs[6];
 static lv_obj_t *s_view_canvas = NULL;
 static uint16_t *s_view_buf = NULL;
 static char s_album_paths[MAX_ALBUM_ITEMS][64];
+static int s_album_ram[MAX_ALBUM_ITEMS];   /* >=0: PSRAM 环第 i 新; -1: 文件 */
 static int s_album_n = 0;
 
 static void album_show_full(int item)
@@ -891,7 +948,10 @@ static void album_show_full(int item)
         toast_show("内存不足");
         return;
     }
-    if (load_jpg_565(s_album_paths[item], tmp, UI_W, UI_H, &w, &h) != 0) {
+    int rc = (s_album_ram[item] >= 0)
+        ? ram_album_decode(s_album_ram[item], tmp, UI_W, UI_H, &w, &h)
+        : load_jpg_565(s_album_paths[item], tmp, UI_W, UI_H, &w, &h);
+    if (rc != 0) {
         PSRAM_FREE(tmp);
         toast_show("读取失败");
         return;
@@ -926,20 +986,27 @@ static void open_album(void)
     lv_obj_clear_flag(s_album_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_album_panel);
 
+    for (int i = 0; i < MAX_ALBUM_ITEMS; i++) s_album_ram[i] = -1;
     d = opendir("/sdcard/DCIM");
-    if (!d) return;
-    while (n < MAX_ALBUM_ITEMS && (ent = readdir(d)) != NULL) {
-        if (strstr(ent->d_name, ".jpg") || strstr(ent->d_name, ".JPG")) {
-            /* 限长复制文件名, 防止 snprintf 截断 (-Werror=format-truncation) */
-            char name[48];
-            strncpy(name, ent->d_name, sizeof(name) - 1);
-            name[sizeof(name) - 1] = '\0';
-            snprintf(s_album_paths[n], sizeof(s_album_paths[0]),
-                     "/sdcard/DCIM/%s", name);
-            n++;
+    if (d) {
+        while (n < MAX_ALBUM_ITEMS && (ent = readdir(d)) != NULL) {
+            if (strstr(ent->d_name, ".jpg") || strstr(ent->d_name, ".JPG")) {
+                /* 限长复制文件名, 防止 snprintf 截断 (-Werror=format-truncation) */
+                char name[48];
+                strncpy(name, ent->d_name, sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0';
+                snprintf(s_album_paths[n], sizeof(s_album_paths[0]),
+                         "/sdcard/DCIM/%s", name);
+                n++;
+            }
+        }
+        closedir(d);
+    } else {
+        /* 无 SD 卡: PSRAM 环兜底 (最新在前) */
+        for (int i = 0; i < s_ram_cnt && n < MAX_ALBUM_ITEMS; i++) {
+            s_album_ram[n++] = i;
         }
     }
-    closedir(d);
     s_album_n = n;
 
     for (int i = 0; i < MAX_ALBUM_ITEMS; i++) {
@@ -950,7 +1017,10 @@ static void open_album(void)
             /* 1/4 档解码 (VGA -> 160x120) 再缩到 96x72, 免全尺寸解码 */
             uint16_t *tmp = PSRAM_MALLOC(160 * 120 * 2);
             if (tmp) {
-                if (load_jpg_565(s_album_paths[i], tmp, 160, 120, &w, &h) == 0) {
+                int rc = (s_album_ram[i] >= 0)
+                    ? ram_album_decode(s_album_ram[i], tmp, 160, 120, &w, &h)
+                    : load_jpg_565(s_album_paths[i], tmp, 160, 120, &w, &h);
+                if (rc == 0) {
                     /* 源=tmp, 目标=缩略缓冲 (分离) */
                     hw2d_scale_stat(tmp, w, h, s_album_bufs[i], 96, 72);
                 }
