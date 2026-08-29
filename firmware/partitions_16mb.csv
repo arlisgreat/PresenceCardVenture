@@ -8,3 +8,6 @@ phy_init,   data, phy,      0x11000,  0x1000
 factory,    app,  factory,  0x20000,  4M
 ota_0,      app,  ota_0,    ,         4M
 ota_1,      app,  ota_1,    ,         4M
+# 全量中文字库 (CJK 基本区 2 万字, LVGL bin 格式, tools/flash_font.sh 烧录;
+# 启动载入 PSRAM, 缺分区/校验失败回退内置 1400 字子集字体)
+fonts,      data, spiffs,   ,         3M

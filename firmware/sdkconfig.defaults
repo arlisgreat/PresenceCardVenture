@@ -87,3 +87,6 @@ CONFIG_BT_CTRL_BLE_MAX_ACT=2
 # 相机任务挪 core1: cam_task 每 16KB DMA 半缓冲做一次 PSRAM 搬运, 在 core0
 # 会持续抢占 LVGL 渲染 (真机实证: 预览融合算子墙钟 39ms, 计算优化无效)
 CONFIG_CAMERA_CORE1=y
+# 全量中文字库: LVGL memfs 驱动 (字体分区 -> PSRAM -> lv_binfont_load)
+CONFIG_LV_USE_FS_MEMFS=y
+CONFIG_LV_FS_MEMFS_LETTER=77

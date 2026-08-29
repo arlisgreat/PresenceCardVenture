@@ -37,6 +37,35 @@ static const char *TAG = "main";
 
 static bool s_quiet_boot;
 
+/*
+ * 全量中文字库 (根本解决缺字乱码): fonts 分区 (3MB, tools/flash_font.sh
+ * 烧录 CJK 基本区 2 万字 Noto Sans SC 16px bin) -> 整体载入 PSRAM ->
+ * memfs + lv_binfont_load。分区未烧/内容无效返回 NULL, 调用方回退
+ * 内置 1400 字子集字体 (pvc_font_cn16)。缓冲随字体生存期常驻 PSRAM。
+ */
+#include "esp_partition.h"
+static const lv_font_t *load_full_cn_font(void)
+{
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "fonts");
+    if (!part) return NULL;
+    uint8_t *buf = heap_caps_malloc(part->size,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return NULL;
+    if (esp_partition_read(part, 0, buf, part->size) != ESP_OK ||
+        buf[0] == 0xFF) {                      /* 全 FF = 分区未烧录 */
+        heap_caps_free(buf);
+        return NULL;
+    }
+    static lv_fs_path_ex_t path;
+    lv_fs_make_path_from_buffer(&path, (char)LV_FS_MEMFS_LETTER, buf,
+                                (uint32_t)part->size, "bin");
+    const lv_font_t *f = lv_binfont_create((const char *)&path);
+    if (!f) heap_caps_free(buf);
+    PVC_EV("font src=%s", f ? "partition_full" : "builtin_subset");
+    return f;
+}
+
 /* WiFi 驱动就绪 (net 任务回调): 内部内存大头已占位, 此时补开相机 */
 static void cam_on_wifi_ready(void)
 {
@@ -125,9 +154,11 @@ void app_main(void)
          * 等 59 个 UI 用字全缺 -> 乱码。自制字体 = 旧子集全集 + 全部
          * UI 用字 + CJK 标点 (1423 字形, 不回退任何覆盖) */
         LV_FONT_DECLARE(pvc_font_cn16);
+        const lv_font_t *cn = load_full_cn_font();   /* 全量字库优先 */
         lv_theme_t *th = lv_theme_default_init(
             disp, lv_palette_main(LV_PALETTE_BLUE),
-            lv_palette_main(LV_PALETTE_RED), true, &pvc_font_cn16);
+            lv_palette_main(LV_PALETTE_RED), true,
+            cn ? cn : &pvc_font_cn16);
         lv_display_set_theme(disp, th);
         bsp_display_unlock();
     }
