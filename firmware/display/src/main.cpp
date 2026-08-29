@@ -61,6 +61,8 @@ constexpr uint8_t kBrightnessBoot = 180;
 constexpr uint8_t kBrightnessArrivalLow = 77;    // ~30%: fade-in start
 constexpr uint8_t kBrightnessArrivalFull = 255;  // 100%: arrival peak
 constexpr uint8_t kBrightnessResident = 179;     // ~70%: resident state after TTL
+constexpr uint8_t kBrightnessBrowseDim = 102;    // ~40%: page-turn dip while loading
+constexpr uint32_t kBrowseRampMs = 220;          // ease back up over the fresh frame
 constexpr int16_t kStickerX = 8;
 constexpr int16_t kStickerY = 8;
 constexpr int16_t kStickerHeight = 32;
@@ -853,8 +855,9 @@ bool renderFeedPhoto(size_t index) {
     return false;
   }
   // Browsing away retires any in-flight arrival ritual and its sticker.
+  // Brightness is owned by carouselShow's page-turn dip, so don't restore here.
   if (arrivalPhase != ArrivalPhase::Idle) repaintStickerRegion();
-  resetArrival(true);
+  resetArrival(false);
   const bool rendered = decodeAndDrawJpeg(jpeg.data, jpeg.size);
   if (!rendered) {
     heap_caps_free(jpeg.data);
@@ -875,7 +878,12 @@ void carouselShow(size_t index) {
   Serial.printf("CAROUSEL %u/%u %s\n", static_cast<unsigned>(index + 1),
                 static_cast<unsigned>(feedCount),
                 feedPhotos[index].photoId.c_str());
+  // Page-turn feel: dip the backlight while the next photo loads, then ease
+  // back up over the fresh frame. Cancels any ramp so nothing fights the dip.
+  blRampActive = false;
+  setBacklightNow(kBrightnessBrowseDim);
   renderFeedPhoto(index);
+  startBacklightRamp(kBrightnessBoot, kBrowseRampMs, false);
 }
 
 // SWIPE_LEFT = next (newer, toward index 0); SWIPE_RIGHT = previous (older).
@@ -901,8 +909,7 @@ void handleCarouselAndSleepGestures() {
     }
     switch (gesture.event) {
       case GestureEvent::SWIPE_UP:
-        enterSleep();
-        break;
+        break;  // 最简手势集: 上滑不再息屏 (误触黑屏太像故障)
       case GestureEvent::SWIPE_LEFT:
         nextSlideAt = millis() + kSlideshowIntervalMs;  // manual nav delays slideshow
         carouselNewer();
