@@ -70,6 +70,15 @@ static const char *TAG = "ui_camera";
 #define BAR_H 60
 #define FRAME_BYTES (UI_W * UI_H * 2)      /* RGB565 全屏 */
 
+/* ---- Presence 设计 Tokens (《屏幕 UI 与交互量化设计规范》§1.1) ---- */
+#define COL_GRASS   lv_color_make(0x3e, 0x7a, 0x3a)   /* 草地绿: 贴纸底 */
+#define COL_SKY     lv_color_make(0x2f, 0x7d, 0xe0)   /* 天空蓝: 时间戳/选中 */
+#define COL_PINK    lv_color_make(0xf7, 0xa8, 0xc8)   /* 糖果粉: 心动高亮 */
+#define COL_CREAM   lv_color_make(0xf5, 0xd7, 0x6e)   /* 奶油黄: 星星本体 */
+#define COL_LILAC   lv_color_make(0xc7, 0xb8, 0xee)   /* 丁香紫: 昵称贴纸底 */
+#define COL_PAPER   lv_color_make(0xfd, 0xfb, 0xf5)   /* 纸白: 拍立得框/文本 */
+#define COL_NIGHT   lv_color_make(0x1a, 0x1d, 0x1a)   /* 暗夜: 遮罩/深字 */
+
 /* 系统统一 QVGA 320x240 (产品只要求 QVGA JPEG): 采集=预览=拍照, 零缩放 */
 #define CAP_W UI_W
 #define CAP_H UI_H
@@ -96,6 +105,16 @@ static void do_like(void);
 static void spawn_like_float(int count);
 static void open_publish_panel(void);
 static lv_obj_t *panel_create(uint32_t h);
+static void icon_close(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
+static void icon_send(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
+static void icon_filter(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
+static void icon_mirror(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
+static void icon_envelope(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
+static lv_obj_t *icon_line(lv_obj_t *parent, const lv_point_precise_t *pts,
+                           uint32_t n, lv_color_t color, int32_t width);
+static lv_obj_t *icon_dot(lv_obj_t *parent, int32_t x, int32_t y,
+                          int32_t d, lv_color_t color);
+static void spawn_star_at(int32_t x, int32_t y);
 
 /* ================= 状态 ================= */
 static lv_obj_t   *s_canvas;               /* 全屏预览画布 */
@@ -906,12 +925,7 @@ static void open_publish_panel(void)
     lv_obj_set_style_pad_all(s_transfer_dot, 0, 0);
     lv_obj_remove_flag(s_transfer_dot, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *envelope = lv_label_create(s_transfer_art);
-    lv_label_set_text(envelope, LV_SYMBOL_ENVELOPE);
-    lv_obj_set_style_text_color(envelope, lv_color_white(), 0);
-    lv_obj_set_style_text_font(envelope, &pvc_font_cn16, 0);
-    lv_obj_set_style_text_letter_space(envelope, 1, 0);
-    lv_obj_set_pos(envelope, 94, 29);
+    icon_envelope(s_transfer_art, 94, 27, lv_color_white());
 
     /* 底部控件视觉很小，真实点击区域各 136x72。 */
     s_publish_controls = lv_obj_create(p);
@@ -928,40 +942,34 @@ static void open_publish_panel(void)
     lv_obj_set_pos(cancel, 0, 0);
     style_large_touch_target(cancel);
     lv_obj_add_event_cb(cancel, on_publish_click, LV_EVENT_CLICKED, (void *)0);
-    lv_obj_t *cancel_ring = lv_obj_create(cancel);
-    lv_obj_set_size(cancel_ring, 48, 48);
-    lv_obj_center(cancel_ring);
-    lv_obj_set_style_bg_opa(cancel_ring, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(cancel_ring, 2, 0);
-    lv_obj_set_style_border_color(cancel_ring, lv_color_white(), 0);
-    lv_obj_set_style_radius(cancel_ring, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(cancel_ring, 0, 0);
-    lv_obj_remove_flag(cancel_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t *cancel_icon = lv_label_create(cancel_ring);
-    lv_label_set_text(cancel_icon, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_color(cancel_icon, lv_color_white(), 0);
-    lv_obj_set_style_text_font(cancel_icon, &pvc_font_cn16, 0);
-    lv_obj_center(cancel_icon);
+    /* 重拍药丸 (规范画面 2): 90x36 纸白 R18, 深色 × */
+    lv_obj_t *cancel_pill = lv_obj_create(cancel);
+    lv_obj_set_size(cancel_pill, 90, 36);
+    lv_obj_center(cancel_pill);
+    lv_obj_set_style_bg_color(cancel_pill, COL_PAPER, 0);
+    lv_obj_set_style_bg_opa(cancel_pill, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(cancel_pill, 0, 0);
+    lv_obj_set_style_radius(cancel_pill, 18, 0);
+    lv_obj_set_style_pad_all(cancel_pill, 0, 0);
+    lv_obj_remove_flag(cancel_pill, LV_OBJ_FLAG_CLICKABLE);
+    icon_close(cancel_pill, 34, 7, COL_NIGHT);
 
     lv_obj_t *send = lv_btn_create(s_publish_controls);
     lv_obj_set_size(send, 136, 72);
     lv_obj_set_pos(send, UI_W - 136, 0);
     style_large_touch_target(send);
     lv_obj_add_event_cb(send, on_publish_click, LV_EVENT_CLICKED, (void *)1);
-    lv_obj_t *send_ring = lv_obj_create(send);
-    lv_obj_set_size(send_ring, 48, 48);
-    lv_obj_center(send_ring);
-    lv_obj_set_style_bg_opa(send_ring, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(send_ring, 2, 0);
-    lv_obj_set_style_border_color(send_ring, lv_color_make(0xbd, 0x4a, 0x3a), 0);
-    lv_obj_set_style_radius(send_ring, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(send_ring, 0, 0);
-    lv_obj_remove_flag(send_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t *send_icon = lv_label_create(send_ring);
-    lv_label_set_text(send_icon, LV_SYMBOL_UPLOAD);
-    lv_obj_set_style_text_color(send_icon, lv_color_make(0xbd, 0x4a, 0x3a), 0);
-    lv_obj_set_style_text_font(send_icon, &pvc_font_cn16, 0);
-    lv_obj_center(send_icon);
+    /* 发布药丸 (规范画面 2): 天空蓝 R18, 白色上升箭头 */
+    lv_obj_t *send_pill = lv_obj_create(send);
+    lv_obj_set_size(send_pill, 90, 36);
+    lv_obj_center(send_pill);
+    lv_obj_set_style_bg_color(send_pill, COL_SKY, 0);
+    lv_obj_set_style_bg_opa(send_pill, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(send_pill, 0, 0);
+    lv_obj_set_style_radius(send_pill, 18, 0);
+    lv_obj_set_style_pad_all(send_pill, 0, 0);
+    lv_obj_remove_flag(send_pill, LV_OBJ_FLAG_CLICKABLE);
+    icon_send(send_pill, 34, 5, COL_PAPER);
 
     lv_obj_move_foreground(p);
     s_publish_open_us = esp_timer_get_time();
@@ -1023,6 +1031,27 @@ static void panel_item(lv_obj_t *panel, const char *txt, int thumb_idx,
 }
 
 /* ---------- 滤镜面板 ---------- */
+/* 滤镜指示 tag (规范画面 2): 顶部居中黑底 0.4 R10, 切换时短暂出现 1.5s */
+static lv_obj_t *s_filter_tag = NULL;
+static lv_timer_t *s_filter_tag_timer = NULL;
+static const char *filter_name(int f);
+
+static void filter_tag_hide_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);
+    s_filter_tag_timer = NULL;
+    if (s_filter_tag) lv_obj_add_flag(s_filter_tag, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_filter_tag(void)
+{
+    if (!s_filter_tag) return;
+    lv_label_set_text(s_filter_tag, filter_name(s_filter));
+    lv_obj_clear_flag(s_filter_tag, LV_OBJ_FLAG_HIDDEN);
+    if (s_filter_tag_timer) lv_timer_del(s_filter_tag_timer);
+    s_filter_tag_timer = lv_timer_create(filter_tag_hide_cb, 1500, NULL);
+}
+
 static void on_filter_click(lv_event_t *e)
 {
     s_filter = (int)(intptr_t)lv_event_get_user_data(e);
@@ -1030,9 +1059,8 @@ static void on_filter_click(lv_event_t *e)
     s_thumb_dirty = true;
     close_panel();
     update_status();
+    show_filter_tag();
 }
-
-static const char *filter_name(int f);
 
 static void open_filter_panel(void)
 {
@@ -1236,29 +1264,64 @@ static void on_view_back_cb(lv_event_t *e)
     }
 }
 
-/* ================= 点赞反馈 (飘字动画 + 音效) ================= */
-static void like_anim_y(void *var, int32_t v)
+/* ================= 轻回应星星 (规范 §3.3-B: Tap 散 ⭐ + 发 like) ================= */
+static void star_cb_y(void *o, int32_t v)    { lv_obj_set_y((lv_obj_t *)o, v); }
+static void star_cb_opa(void *o, int32_t v)  { lv_obj_set_style_opa((lv_obj_t *)o, (lv_opa_t)v, 0); }
+static void star_cb_zoom(void *o, int32_t v) { lv_obj_set_style_transform_zoom((lv_obj_t *)o, (uint16_t)v, 0); }
+
+/* 四点像素星 (12->20px, 奶油黄, 上飘 40px 同时放大淡出, 1000ms ease-out) */
+static const lv_point_precise_t P_STAR_V[] = {{8, 0}, {8, 16}};
+static const lv_point_precise_t P_STAR_H[] = {{0, 8}, {16, 8}};
+static void spawn_star_at(int32_t x, int32_t y)
 {
-    lv_obj_set_y((lv_obj_t *)var, v);
+    lv_obj_t *g = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(g, 17, 17);
+    lv_obj_set_pos(g, x - 8, y - 8);
+    lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g, 0, 0);
+    lv_obj_set_style_pad_all(g, 0, 0);
+    lv_obj_set_style_radius(g, 0, 0);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *v = icon_line(g, P_STAR_V, 2, COL_CREAM, 2);
+    lv_obj_set_pos(v, 8, 0);
+    lv_obj_t *h = icon_line(g, P_STAR_H, 2, COL_CREAM, 2);
+    lv_obj_set_pos(h, 0, 8);
+    icon_dot(g, 5, 5, 7, COL_CREAM);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, g);
+    lv_anim_set_exec_cb(&a, star_cb_y);
+    lv_anim_set_values(&a, y - 8, y - 48);
+    lv_anim_set_duration(&a, 1000);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, g);
+    lv_anim_set_exec_cb(&a, star_cb_opa);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&a, 1000);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, g);
+    lv_anim_set_exec_cb(&a, star_cb_zoom);
+    lv_anim_set_values(&a, 205, 358);   /* 0.8x -> 1.4x */
+    lv_anim_set_duration(&a, 1000);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+
+    lv_obj_delete_delayed(g, 1080);
 }
 
+/* 被赞通知 (云端轮询发现本人照片新增 like): 连散数颗星 */
 static void spawn_like_float(int count)
 {
     if (count > 3) count = 3;
     for (int i = 0; i < count; i++) {
-        lv_obj_t *l = lv_label_create(lv_scr_act());
-        lv_label_set_text(l, "+1 赞");
-        lv_obj_set_style_text_color(l, lv_color_make(0xE8, 0x4A, 0x6A), 0);
-        lv_obj_set_pos(l, 136 + i * 26, 190);
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, l);
-        lv_anim_set_exec_cb(&a, like_anim_y);
-        lv_anim_set_values(&a, 190, 70);
-        lv_anim_set_duration(&a, 1200);
-        lv_anim_set_delay(&a, (uint32_t)i * 150);
-        lv_anim_start(&a);
-        lv_obj_delete_delayed(l, 1700 + (uint32_t)i * 150);
+        spawn_star_at(120 + i * 40, 150 - (i % 2) * 24);
     }
 }
 
@@ -1267,10 +1330,28 @@ static lv_obj_t *s_feed_panel = NULL;
 static lv_obj_t *s_feed_canvas = NULL;
 static uint16_t *s_feed_buf = NULL;           /* 320x240 RGB565 (PSRAM) */
 static lv_obj_t *s_feed_author, *s_feed_caption, *s_feed_counter;
+static lv_obj_t *s_feed_circle_btn = NULL;    /* 全部/小圈 切换 */
 static pvc_feed_item_t s_feed_items[PVC_FEED_MAX];
 static int s_feed_n = 0, s_feed_idx = 0;
+static bool s_feed_circle_only = false;   /* true = 只看小圈内容 */
 static bool s_feed_auto = false;          /* 到达仪式自动展示中 (交互即取消) */
 static lv_timer_t *s_arrival_timer = NULL;
+
+/* 拉取缓存快照; 小圈模式下只保留带小圈标记的条目 */
+static int feed_snapshot_filtered(void)
+{
+    pvc_feed_item_t all[PVC_FEED_MAX];
+    int n = pvc_feed_snapshot(all, PVC_FEED_MAX);
+    if (!s_feed_circle_only) {
+        memcpy(s_feed_items, all, sizeof(pvc_feed_item_t) * (size_t)n);
+        return n;
+    }
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        if (all[i].circle[0]) s_feed_items[m++] = all[i];
+    }
+    return m;
+}
 
 
 /* 解码并显示 s_feed_items[s_feed_idx] */
@@ -1305,25 +1386,47 @@ static void render_feed(void)
     }
 
     char line[112];
-    snprintf(line, sizeof(line), "%s", it->author[0] ? it->author : "?");
+    snprintf(line, sizeof(line), "%s%s%s",
+             it->author[0] ? it->author : "?",
+             it->circle[0] ? " · " : "", it->circle);
     lv_label_set_text(s_feed_author, line);
     lv_label_set_text(s_feed_caption, it->caption);
     snprintf(line, sizeof(line), "%d/%d", s_feed_idx + 1, s_feed_n);
     lv_label_set_text(s_feed_counter, line);
+    if (s_feed_circle_btn) {
+        lv_obj_t *lb = lv_obj_get_child(s_feed_circle_btn, 0);
+        if (lb) lv_label_set_text(lb, s_feed_circle_only ? "小圈" : "全部");
+    }
     lv_obj_invalidate(s_feed_canvas);
+}
+
+static void on_feed_circle_toggle(lv_event_t *e)
+{
+    (void)e;
+    s_feed_auto = false;
+    s_feed_circle_only = !s_feed_circle_only;
+    s_feed_n = feed_snapshot_filtered();
+    if (s_feed_idx >= s_feed_n) s_feed_idx = 0;
+    if (s_feed_n == 0) {
+        toast_show(s_feed_circle_only ? "小圈暂无照片" : "暂无好友照片");
+        lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    render_feed();
 }
 
 static void open_feed(void)
 {
     s_feed_auto = false;
     close_panel();
-    s_feed_n = pvc_feed_snapshot(s_feed_items, PVC_FEED_MAX);
+    s_feed_n = feed_snapshot_filtered();
     pvc_net_signal_feed();                 /* 顺手触发一次刷新 */
     if (s_feed_n == 0) {
-        toast_show("暂无好友照片");
+        toast_show(s_feed_circle_only ? "小圈暂无照片" : "暂无好友照片");
         return;
     }
     if (s_feed_idx >= s_feed_n) s_feed_idx = 0;
+    lv_obj_set_style_opa(s_feed_panel, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_feed_panel);
     render_feed();
@@ -1370,20 +1473,20 @@ static void on_feed_heart(lv_event_t *e)
     do_like();
 }
 
-/* 双击照片点赞 (400ms 内两次点击) */
+/* 轻回应 (规范 §3.3-B): 单击照片任意位置 -> 按压处散星 + 发 like;
+ * 连击不限次 (每 tap 一颗星一次 like, 反应走异步队列, 云端限额兜底) */
 static void on_feed_canvas_click(lv_event_t *e)
 {
     (void)e;
     s_feed_auto = false;
-    static uint32_t s_last_ms;
-    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    if (now - s_last_ms < 400) {
-        s_last_ms = 0;
-        PVC_EV("like via=double_tap");
-        do_like();
-    } else {
-        s_last_ms = now;
+    lv_indev_t *indev = lv_indev_active();
+    if (indev) {
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        spawn_star_at(p.x, p.y);
     }
+    PVC_EV("like via=tap");
+    do_like();
 }
 
 /* pvc_config 回调 (联网任务): 应用 web 下发的配置 */
@@ -1413,15 +1516,38 @@ void ui_apply_remote_config(const pvc_config_t *cfg)
     bsp_display_unlock();
 }
 
-/* 到达仪式自动展示的收起定时器 (3s; 期间用户交互则保留页面) */
+/* 到达仪式收起: 20s TTL 到点后 500ms 淡出 (规范 §3.3-A/§4);
+ * 期间任何交互 (s_feed_auto 已清) 则保留页面 */
+static void arrival_fade_opa(void *o, int32_t v)
+{
+    lv_obj_set_style_opa((lv_obj_t *)o, (lv_opa_t)v, 0);
+}
+static void arrival_fade_done(lv_anim_t *a)
+{
+    (void)a;
+    if (s_feed_panel) {
+        lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_opa(s_feed_panel, LV_OPA_COVER, 0);
+    }
+    s_feed_auto = false;
+}
 static void arrival_hide_cb(lv_timer_t *t)
 {
     lv_timer_del(t);
     s_arrival_timer = NULL;
     if (s_feed_auto && s_feed_panel) {
-        lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_feed_panel);
+        lv_anim_set_exec_cb(&a, arrival_fade_opa);
+        lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+        lv_anim_set_duration(&a, 500);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_set_ready_cb(&a, arrival_fade_done);
+        lv_anim_start(&a);
+    } else {
+        s_feed_auto = false;
     }
-    s_feed_auto = false;
 }
 
 /* pvc_net 回调 (联网任务): feed 有更新 / 本人照片被赞 */
@@ -1439,23 +1565,25 @@ void ui_net_feed_updated(int total, int fresh, int new_likes)
         pvc_sound_play(PVC_SND_DING);
         bsp_display_backlight_on();
         lv_display_trigger_activity(NULL);   /* 重置省电空闲计时 */
-        s_feed_n = pvc_feed_snapshot(s_feed_items, PVC_FEED_MAX);
+        s_feed_n = feed_snapshot_filtered();
         PVC_EV("arrival fresh=%d shown=%d", fresh, (int)(s_feed_n > 0));
         if (s_feed_n > 0 && s_feed_panel && s_feed_buf) {
             s_feed_idx = 0;
             s_feed_auto = true;
+            lv_obj_set_style_opa(s_feed_panel, LV_OPA_COVER, 0);
             lv_obj_clear_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(s_feed_panel);
             render_feed();
             if (s_arrival_timer) lv_timer_del(s_arrival_timer);
-            s_arrival_timer = lv_timer_create(arrival_hide_cb, 3000, NULL);
+            /* 小圈闪现停留 20s, 到点自动淡出归入历史 (规范 TTL 机制) */
+            s_arrival_timer = lv_timer_create(arrival_hide_cb, 20000, NULL);
         }
         char msg[32];
         snprintf(msg, sizeof(msg), "新照片 +%d", fresh);
         toast_show(msg);
     } else if (s_feed_panel && !lv_obj_has_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN)) {
         /* 浏览页开着时就地刷新 */
-        s_feed_n = pvc_feed_snapshot(s_feed_items, PVC_FEED_MAX);
+        s_feed_n = feed_snapshot_filtered();
         if (s_feed_n == 0) {
             lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -1506,6 +1634,127 @@ static void style_tool_btn(lv_obj_t *btn)
     lv_obj_set_style_bg_opa(btn, LV_OPA_30, LV_STATE_PRESSED);
     lv_obj_set_style_transform_scale(btn, 246, LV_STATE_PRESSED);
 }
+
+/* ---- 手绘线稿图标 ----
+ * 自制 Noto Sans SC 子集字体不含 LV_SYMBOL 私用区字形 (真机实测全部
+ * 渲染为空白), 图标一律用 lv_line/圆点手绘, 同时契合低分辨率极简风。
+ * lv_line_set_points 不拷贝点数组, 必须使用静态存储。 */
+static lv_obj_t *icon_line(lv_obj_t *parent, const lv_point_precise_t *pts,
+                           uint32_t n, lv_color_t color, int32_t width)
+{
+    lv_obj_t *l = lv_line_create(parent);
+    lv_line_set_points(l, pts, n);
+    lv_obj_set_style_line_color(l, color, 0);
+    lv_obj_set_style_line_width(l, width, 0);
+    lv_obj_set_style_line_rounded(l, true, 0);
+    lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
+    return l;
+}
+
+static lv_obj_t *icon_dot(lv_obj_t *parent, int32_t x, int32_t y,
+                          int32_t d, lv_color_t color)
+{
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_set_size(o, d, d);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_style_bg_color(o, color, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    return o;
+}
+
+/* 滤镜 = 三条滑杆 + 错位的滑块点 (28x22) */
+static const lv_point_precise_t P_FL1[] = {{0, 0}, {28, 0}};
+static const lv_point_precise_t P_FL2[] = {{0, 11}, {28, 11}};
+static const lv_point_precise_t P_FL3[] = {{0, 22}, {28, 22}};
+static void icon_filter(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c)
+{
+    lv_obj_t *g = lv_obj_create(parent);
+    lv_obj_set_size(g, 28, 23);
+    lv_obj_set_pos(g, x, y);
+    lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g, 0, 0);
+    lv_obj_set_style_pad_all(g, 0, 0);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+    /* lv_line 自动取自身点集包围盒, 三条线分别定位 */
+    lv_obj_t *l1 = icon_line(g, P_FL1, 2, c, 2);
+    lv_obj_set_pos(l1, 0, 0);
+    lv_obj_t *l2 = icon_line(g, P_FL2, 2, c, 2);
+    lv_obj_set_pos(l2, 0, 11);
+    lv_obj_t *l3 = icon_line(g, P_FL3, 2, c, 2);
+    lv_obj_set_pos(l3, 0, 22);
+    icon_dot(g, 16, -3, 7, c);    /* 第一根滑块偏右 */
+    icon_dot(g, 5, 8, 7, c);      /* 第二根偏左 */
+    icon_dot(g, 19, 19, 7, c);    /* 第三根偏右 */
+}
+
+/* 镜像 = 中轴竖线 + 左右相对箭头 (28x24) */
+static const lv_point_precise_t P_MIR_AXIS[] = {{14, 0}, {14, 24}};
+static const lv_point_precise_t P_MIR_L[] = {{9, 6}, {2, 12}, {9, 18}};
+static const lv_point_precise_t P_MIR_R[] = {{19, 6}, {26, 12}, {19, 18}};
+static void icon_mirror(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c)
+{
+    lv_obj_t *g = lv_obj_create(parent);
+    lv_obj_set_size(g, 28, 25);
+    lv_obj_set_pos(g, x, y);
+    lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g, 0, 0);
+    lv_obj_set_style_pad_all(g, 0, 0);
+    lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *a = icon_line(g, P_MIR_AXIS, 2, c, 2);
+    lv_obj_set_pos(a, 14, 0);
+    lv_obj_t *l = icon_line(g, P_MIR_L, 3, c, 2);
+    lv_obj_set_pos(l, 2, 6);
+    lv_obj_t *r = icon_line(g, P_MIR_R, 3, c, 2);
+    lv_obj_set_pos(r, 19, 6);
+    (void)a; (void)l; (void)r;
+}
+
+/* 取消 = 手绘交叉线 (22x22) */
+static const lv_point_precise_t P_CLOSE_A[] = {{0, 0}, {22, 22}};
+static const lv_point_precise_t P_CLOSE_B[] = {{22, 0}, {0, 22}};
+static void icon_close(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c)
+{
+    lv_obj_t *a = icon_line(parent, P_CLOSE_A, 2, c, 3);
+    lv_obj_set_pos(a, x, y);
+    lv_obj_t *b = icon_line(parent, P_CLOSE_B, 2, c, 3);
+    lv_obj_set_pos(b, x, y);
+    (void)a; (void)b;
+}
+
+/* 发送 = 上升箭头 (22x26) */
+static const lv_point_precise_t P_SEND_STEM[] = {{11, 26}, {11, 4}};
+static const lv_point_precise_t P_SEND_HEAD[] = {{3, 12}, {11, 4}, {19, 12}};
+static void icon_send(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c)
+{
+    lv_obj_t *a = icon_line(parent, P_SEND_STEM, 2, c, 3);
+    lv_obj_set_pos(a, x, y);
+    lv_obj_t *b = icon_line(parent, P_SEND_HEAD, 3, c, 3);
+    lv_obj_set_pos(b, x, y);
+    (void)a; (void)b;
+}
+
+/* 信封 = 矩形框 + 翻盖折线 (30x20), 用于上传过渡 */
+static const lv_point_precise_t P_ENV_FLAP[] = {{0, 0}, {15, 11}, {30, 0}};
+static void icon_envelope(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, 30, 20);
+    lv_obj_set_pos(box, x, y);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_style_border_color(box, c, 0);
+    lv_obj_set_style_radius(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *flap = icon_line(box, P_ENV_FLAP, 3, c, 2);
+    lv_obj_set_pos(flap, 0, 0);
+    (void)flap;
+}
+
 static void btn_shutter_cb(lv_event_t *e) { (void)e; take_photo(); }
 static void btn_album_cb(lv_event_t *e)   { (void)e; open_album(); }
 static void btn_filter_cb(lv_event_t *e)  { (void)e; open_filter_panel(); }
@@ -1516,7 +1765,7 @@ static void btn_mirror_cb(lv_event_t *e)
     s_mirror = !s_mirror;
     s_thumb_dirty = true;
     if (s_mirror_label) {
-        lv_obj_set_style_text_color(s_mirror_label,
+        lv_obj_set_style_bg_color(s_mirror_label,
             s_mirror ? lv_color_make(0xf8, 0xf5, 0xee)
                      : lv_color_make(0xbd, 0x4a, 0x3a), 0);
     }
@@ -1600,6 +1849,18 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_pad_all(s_status_r, 0, 0);
     lv_obj_remove_flag(s_status_r, LV_OBJ_FLAG_CLICKABLE);
 
+    /* 滤镜名 tag (规范画面 2): 顶部居中, 切换滤镜时短暂出现 */
+    s_filter_tag = lv_label_create(scr);
+    lv_obj_set_style_bg_color(s_filter_tag, COL_NIGHT, 0);
+    lv_obj_set_style_bg_opa(s_filter_tag, LV_OPA_40, 0);
+    lv_obj_set_style_radius(s_filter_tag, 10, 0);
+    lv_obj_set_style_pad_hor(s_filter_tag, 10, 0);
+    lv_obj_set_style_pad_ver(s_filter_tag, 2, 0);
+    lv_obj_set_style_text_color(s_filter_tag, COL_PAPER, 0);
+    lv_obj_align(s_filter_tag, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_add_flag(s_filter_tag, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_filter_tag, LV_OBJ_FLAG_CLICKABLE);
+
     /* 滤镜缩略图只在弹出面板显示; 不常驻遮挡低分辨率取景画面。 */
     s_thumb_raw = PSRAM_MALLOC(THUMB_SZ * THUMB_SZ * 2);
     for (int i = 0; i < HW2D_FILTER_MAX; i++) {
@@ -1624,10 +1885,8 @@ void ui_beauty_camera_create(void)
     style_tool_btn(b_filter);
     lv_obj_add_event_cb(b_filter, btn_filter_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(b_filter, btn_beauty_cb, LV_EVENT_LONG_PRESSED, NULL);
-    lv_obj_t *b_filter_l = lv_label_create(b_filter);
-    lv_label_set_text(b_filter_l, LV_SYMBOL_CHARGE);
-    lv_obj_set_style_text_color(b_filter_l, lv_color_make(0xf8, 0xf5, 0xee), 0);
-    lv_obj_center(b_filter_l);
+    icon_filter(b_filter, (104 - 28) / 2, (BAR_H - 23) / 2,
+                lv_color_make(0xf8, 0xf5, 0xee));
 
     /* 双细线快门；112x60 热区，按下立即缩放反馈。 */
     lv_obj_t *b_shutter = lv_btn_create(bar);
@@ -1661,11 +1920,17 @@ void ui_beauty_camera_create(void)
     lv_obj_set_pos(b_mirror, 216, 0);
     style_tool_btn(b_mirror);
     lv_obj_add_event_cb(b_mirror, btn_mirror_cb, LV_EVENT_CLICKED, NULL);
-    s_mirror_label = lv_label_create(b_mirror);
-    lv_label_set_text(s_mirror_label, LV_SYMBOL_REFRESH);
-    lv_obj_set_style_text_font(s_mirror_label, &pvc_font_cn16, 0);
-    lv_obj_set_style_text_color(s_mirror_label, lv_color_make(0xf8, 0xf5, 0xee), 0);
-    lv_obj_center(s_mirror_label);
+    s_mirror_label = lv_obj_create(b_mirror);   /* 复用为开关指示点 */
+    lv_obj_set_size(s_mirror_label, 7, 7);
+    lv_obj_set_pos(s_mirror_label, 104 / 2 + 22, 8);
+    lv_obj_set_style_bg_color(s_mirror_label, lv_color_make(0xf8, 0xf5, 0xee), 0);
+    lv_obj_set_style_bg_opa(s_mirror_label, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_mirror_label, 0, 0);
+    lv_obj_set_style_radius(s_mirror_label, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(s_mirror_label, 0, 0);
+    lv_obj_remove_flag(s_mirror_label, LV_OBJ_FLAG_CLICKABLE);
+    icon_mirror(b_mirror, (104 - 28) / 2, (BAR_H - 25) / 2,
+                lv_color_make(0xf8, 0xf5, 0xee));
 
     /* ---------- 相册界面 (常驻, 默认隐藏) ---------- */
     s_album_panel = lv_obj_create(scr);
@@ -1752,7 +2017,25 @@ void ui_beauty_camera_create(void)
                             LV_EVENT_CLICKED, NULL);
     }
 
-    /* 底部信息条: 作者 + 配文 + 计数 */
+    /* 昵称贴纸 (规范画面 1): 左上 8,8 丁香紫 85% 底 + 1px 白边 + R4 + -2° */
+    s_feed_author = lv_label_create(s_feed_panel);
+    lv_obj_set_pos(s_feed_author, 8, 8);
+    lv_obj_set_style_bg_color(s_feed_author, COL_LILAC, 0);
+    lv_obj_set_style_bg_opa(s_feed_author, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(s_feed_author, 1, 0);
+    lv_obj_set_style_border_color(s_feed_author, lv_color_white(), 0);
+    lv_obj_set_style_radius(s_feed_author, 4, 0);
+    lv_obj_set_style_pad_hor(s_feed_author, 8, 0);
+    lv_obj_set_style_pad_ver(s_feed_author, 2, 0);
+    lv_obj_set_style_text_color(s_feed_author, COL_NIGHT, 0);
+    lv_obj_set_style_shadow_width(s_feed_author, 2, 0);
+    lv_obj_set_style_shadow_color(s_feed_author, COL_NIGHT, 0);
+    lv_obj_set_style_shadow_opa(s_feed_author, LV_OPA_20, 0);
+    lv_obj_set_style_shadow_offset_x(s_feed_author, 2, 0);
+    lv_obj_set_style_shadow_offset_y(s_feed_author, 2, 0);
+    lv_obj_set_style_transform_rotation(s_feed_author, -20, 0);  /* -2.0° */
+
+    /* 底部信息条: 配文 + 计数 */
     lv_obj_t *fbar = lv_obj_create(s_feed_panel);
     lv_obj_set_size(fbar, UI_W, 36);
     lv_obj_set_pos(fbar, 0, UI_H - 36);
@@ -1763,11 +2046,8 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_radius(fbar, 0, 0);
     lv_obj_set_style_shadow_width(fbar, 0, 0);
 
-    s_feed_author = lv_label_create(fbar);
-    lv_obj_set_pos(s_feed_author, 8, 2);
-    lv_obj_set_style_text_color(s_feed_author, lv_color_white(), 0);
     s_feed_caption = lv_label_create(fbar);
-    lv_obj_set_pos(s_feed_caption, 8, 19);
+    lv_obj_set_pos(s_feed_caption, 8, 10);
     lv_obj_set_width(s_feed_caption, UI_W - 120);
     lv_label_set_long_mode(s_feed_caption, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(s_feed_caption, lv_color_make(0xc0, 0xc6, 0xd2), 0);
@@ -1812,10 +2092,23 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_text_color(f_heart_l, lv_color_white(), 0);
     lv_obj_center(f_heart_l);
 
+    /* 全部/小圈 切换 (小圈互动入口: 只看小圈内容, 双击或按钮点赞) */
+    s_feed_circle_btn = lv_btn_create(s_feed_panel);
+    lv_obj_set_size(s_feed_circle_btn, 64, 30);
+    lv_obj_set_pos(s_feed_circle_btn, UI_W - 144, 6);
+    lv_obj_set_style_bg_color(s_feed_circle_btn, lv_color_make(0x28, 0x30, 0x40), 0);
+    lv_obj_add_event_cb(s_feed_circle_btn, on_feed_circle_toggle,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_t *f_circle_l = lv_label_create(s_feed_circle_btn);
+    lv_label_set_text(f_circle_l, "全部");
+    lv_obj_set_style_text_color(f_circle_l, lv_color_white(), 0);
+    lv_obj_center(f_circle_l);
+
     update_status();
 
-    /* 预览刷新定时器 (25 FPS): 每 tick grab 最新帧 -> 渲染 -> release */
-    lv_timer_create(preview_timer_cb, 40, NULL);
+    /* 预览刷新定时器: 12.5 FPS。自拍取景足够流畅, 且把 core0/LVGL 任务
+     * 从全屏渲染中解放出来 —— 25FPS 时触摸采样被饿死, 点按明显迟钝 */
+    lv_timer_create(preview_timer_cb, 80, NULL);
 
     /* 状态栏真实时钟 (SNTP/RTC 驱动, 每 5s 刷一次足够) */
     lv_timer_create(clock_timer_cb, 5000, NULL);

@@ -90,10 +90,12 @@ void app_main(void)
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
     bsp_display_cfg_t disp_cfg = {
         .lvgl_port_cfg = {
-            .task_priority = 4,
+            /* 触控灵敏度实测: LVGL 任务优先级需拉高, 否则全屏预览渲染
+             * 期间触摸 indev 采样被饿死, 快速点按丢失; max_sleep 同步收紧 */
+            .task_priority = 6,
             .task_stack = 10240,
             .task_affinity = 0,
-            .task_max_sleep_ms = 500,
+            .task_max_sleep_ms = 10,
             .task_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT,
             .timer_period_ms = 5,
         },
