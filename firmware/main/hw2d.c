@@ -488,6 +488,30 @@ void hw2d_yuv_filter_rgb565_rot180(uint16_t *dst, const uint8_t *src,
     }
 }
 
+/*
+ * 色度降噪: 每行对 Cb/Cr 各做 1-2-1 水平平滑 (宏像素粒度, 原地)。
+ * 传感器色度噪声在低光下呈单像素彩点 (常偏绿: YUV 数据受扰后
+ * 转 RGB 的钳位方向所致); Y 磨皮不动色度, 这里补上。~2ms @QVGA。
+ */
+void hw2d_yuv_chroma_smooth(uint8_t *yuyv, uint32_t w, uint32_t h)
+{
+    if (!yuyv || w < 4 || (w & 1u)) return;
+    uint32_t nmp = w / 2;
+    for (uint32_t y = 0; y < h; y++) {
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        uint8_t pcb = row[1], pcr = row[3];      /* 左邻原值 (首像素用自身) */
+        for (uint32_t i = 0; i < nmp; i++) {
+            uint8_t *m = row + (size_t)i * 4;
+            uint8_t cb = m[1], cr = m[3];
+            uint8_t ncb = (i + 1 < nmp) ? m[5] : cb;
+            uint8_t ncr = (i + 1 < nmp) ? m[7] : cr;
+            m[1] = (uint8_t)((pcb + 2 * cb + ncb) >> 2);
+            m[3] = (uint8_t)((pcr + 2 * cr + ncr) >> 2);
+            pcb = cb; pcr = cr;                  /* 左邻用原值, 防级联扩散 */
+        }
+    }
+}
+
 /* YUYV422 原地 180 度旋转: 宏像素序倒置 + 对内 Y0/Y1 互换 (色度随对) */
 void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix)
 {

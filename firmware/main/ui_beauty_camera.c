@@ -258,6 +258,9 @@ static void preview_timer_cb(lv_timer_t *t)
     if (f->width == UI_W && f->height == UI_H) {
         /* QVGA YUV422 直通: YUV 域滤镜 + RGB565 转换融合单遍 (显示边界) */
         const uint8_t *yuyv = (const uint8_t *)f->buf;
+        /* 色度降噪 (原地改相机帧, 下次采集整帧重写): 低光绿噪点主因是
+         * 传感器色度噪声, Y 磨皮不覆盖 */
+        hw2d_yuv_chroma_smooth((uint8_t *)yuyv, UI_W, UI_H);
         hw2d_yuv_build_luts(&s_active_filter, &s_yuv_luts);
         /* rot180: 装配方向补偿 (GC0308 寄存器翻转真机写不进, 软件反向写出) */
         hw2d_yuv_filter_rgb565_rot180_stat(s_canvas_buf, yuyv, UI_W * UI_H,
@@ -538,6 +541,7 @@ static void photo_worker(void *arg)
         static hw2d_yuv_luts_t s_wk_luts;      /* worker 单任务专用 */
         /* 装配方向补偿: 先转 180 度, 后续人脸框/贴纸坐标即与预览一致 */
         hw2d_yuv_rot180(yuyv, pw * ph);
+        hw2d_yuv_chroma_smooth(yuyv, pw, ph);  /* 成片同预览: 色度降噪 */
         if (job.mirror) hw2d_yuv_hmirror(yuyv, pw, ph);
         hw2d_yuv_blur_y(yuyv, yuyv, pw, ph, (uint8_t)job.smooth);
         int64_t t_blur = esp_timer_get_time();

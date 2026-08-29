@@ -262,6 +262,28 @@ int main(void)
         CHECK(memcmp(yuv, yuv_orig, sizeof(yuv)) == 0, "yuv hmirror twice");
     }
 
+    /* ---- 色度降噪: 恒定色度不变 / 单点尖峰衰减 / Y 不动 ---- */
+    {
+        enum { CW = 32, CH = 4 };
+        static uint8_t cs[CW * CH * 2];
+        for (size_t i = 0; i < sizeof(cs); i += 4) {
+            cs[i] = 100; cs[i + 1] = 110; cs[i + 2] = 105; cs[i + 3] = 140;
+        }
+        hw2d_yuv_chroma_smooth(cs, CW, CH);
+        int flat_ok = 1;
+        for (size_t i = 0; i < sizeof(cs); i += 4) {
+            if (cs[i] != 100 || cs[i + 1] != 110 ||
+                cs[i + 2] != 105 || cs[i + 3] != 140) { flat_ok = 0; break; }
+        }
+        CHECK(flat_ok, "chroma_smooth changed flat frame");
+
+        cs[8 * 4 + 1] = 255;               /* 行中部 Cb 尖峰 */
+        hw2d_yuv_chroma_smooth(cs, CW, CH);
+        CHECK(cs[8 * 4 + 1] < 200 && cs[8 * 4 + 1] > 110,
+              "spike not attenuated: %d", cs[8 * 4 + 1]);
+        CHECK(cs[8 * 4] == 100 && cs[8 * 4 + 2] == 105, "smooth touched Y");
+    }
+
     /* ---- OTA 纯逻辑: 语义版本比较 + MD5 hex 解析 (含模糊) ---- */
     {
         static const struct { const char *a, *b; int want; } vc[] = {

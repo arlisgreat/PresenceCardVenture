@@ -184,6 +184,9 @@ void hw2d_yuv_filter_rgb565_rot180_stat(uint16_t *dst, const uint8_t *src,
 /* YUYV422 原地 180 度旋转 (拍照链: 快照进 worker 先转再处理, ~2ms) */
 void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix);
 
+/* 色度降噪: Cb/Cr 各 1-2-1 水平平滑 (传感器低光彩点/绿噪点; Y 不动) */
+void hw2d_yuv_chroma_smooth(uint8_t *yuyv, uint32_t w, uint32_t h);
+
 /* 自拍镜像: RGB565 预览与 YUYV422 成片均按行水平翻转; 调用两次恢复原图。 */
 void hw2d_rgb565_hmirror(uint16_t *rgb, uint32_t w, uint32_t h);
 void hw2d_yuv_hmirror(uint8_t *yuyv, uint32_t w, uint32_t h);
