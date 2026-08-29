@@ -10,7 +10,9 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# >=512B 的 malloc 优先 PSRAM (真机: BLE 配网时内部堆只差 ~15KB, 中等分配
+# 全挪外部; WiFi/BLE 驱动走显式 heap_caps 内部分配不受影响)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 
 # S3 I/D-Cache 扩容至 32KB: 像素算子 / 滤波 LUT / 缩放行缓冲命中率提升,
 # 对逐像素渲染收益明显 (代价: 片内 SRAM 各减 16KB, CoreS3 仍有 512KB 足够)
@@ -63,3 +65,18 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # 回滚保护: 新固件首次启动为 PENDING_VERIFY, 自检 (首次 feed 同步成功) 后
 # pvc_ota_mark_valid() 落账; 未落账即重启/崩溃则 bootloader 自动回滚旧槽
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# --- 内部 SRAM 压力 (真机实测: BLE 控制器 init OOM -> IDF deinit 路径崩溃循环) ---
+# NimBLE 主机堆放 PSRAM; WiFi/LWIP 缓冲优先 PSRAM; 显示缓冲已缩至 320x24x2
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# LVGL 用 clib malloc 替代 64KB 内部静态池 (work_mem_int, 真机 .bss 最大头):
+# 小对象经 SPIRAM_MALLOC_ALWAYSINTERNAL 仍走内部, 但 64KB 不再整块占死
+CONFIG_LV_USE_CLIB_MALLOC=y
+# 相机 DMA 降 16KB (QVGA 中断频率仍低), WiFi 静态 RX 10->8: 内部堆再省 ~20KB
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=24
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+# BLE 仅用于配网 (1 个从连接): 控制器活动数 6->2, 省内部堆
+CONFIG_BT_CTRL_BLE_MAX_ACT=2

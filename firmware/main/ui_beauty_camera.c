@@ -1284,6 +1284,12 @@ static void btn_flip_long_cb(lv_event_t *e)
 /* ================= 创建 UI ================= */
 void ui_beauty_camera_create(void)
 {
+    /* 真机实测: 本函数在 main 任务跑, LVGL 刷新任务已在并发运行 ——
+     * 建树全程必须持显示锁, 否则样式链表被并发遍历 LoadProhibited */
+    if (!bsp_display_lock(3000)) {
+        ESP_LOGE(TAG, "ui create: display lock timeout");
+        return;
+    }
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_make(0x0a, 0x0d, 0x14), 0);
 
@@ -1581,24 +1587,39 @@ void ui_beauty_camera_create(void)
 
     update_status();
 
-    /* 拍照后处理 worker: core1, 快门不阻塞预览; 队列深 2, 满则拒拍。
-     * 缓冲全部预分配 (快照池 3x600KB + work/qvga/enc), 拍照路径零 malloc */
-    pvc_sound_init();
-    if (!s_caption_sem) s_caption_sem = xSemaphoreCreateBinary();
-    for (int i = 0; i < SNAP_POOL_N; i++) s_snap_pool[i] = PSRAM_MALLOC(CAP_BYTES);
-    s_wk_enc  = PSRAM_MALLOC(WK_ENC_CAP);
-    s_face_rgb = PSRAM_MALLOC(FRAME_BYTES);
-    hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_ORIGINAL), &s_id_luts);
-    s_photo_q = xQueueCreate(2, sizeof(photo_job_t));
-    if (s_photo_q) {
-        xTaskCreatePinnedToCore(photo_worker, "photo_wk", 8192, NULL, 3, NULL, 1);
-    }
-
     /* 预览刷新定时器 (25 FPS): 每 tick grab 最新帧 -> 渲染 -> release */
     lv_timer_create(preview_timer_cb, 40, NULL);
 
     /* 状态栏真实时钟 (SNTP/RTC 驱动, 每 5s 刷一次足够) */
     lv_timer_create(clock_timer_cb, 5000, NULL);
+
+    bsp_display_unlock();
+}
+
+/*
+ * 拍照 worker 延迟启动 (真机内部 SRAM 紧张: 8KB 任务栈等 WiFi/BLE 占位后
+ * 再分配, 与相机一起由 net 层 wifi_ready 触发)。启动前快门被
+ * !s_photo_q 守卫拒绝 —— 相机没开之前本来也拍不了。幂等。
+ */
+void ui_start_photo_worker(void)
+{
+    if (s_photo_q) return;
+    pvc_sound_init();
+    if (!s_caption_sem) s_caption_sem = xSemaphoreCreateBinary();
+    for (int i = 0; i < SNAP_POOL_N; i++) {
+        if (!s_snap_pool[i]) s_snap_pool[i] = PSRAM_MALLOC(CAP_BYTES);
+    }
+    if (!s_wk_enc)   s_wk_enc = PSRAM_MALLOC(WK_ENC_CAP);
+    if (!s_face_rgb) s_face_rgb = PSRAM_MALLOC(FRAME_BYTES);
+    hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_ORIGINAL), &s_id_luts);
+    /* 先发布队列再建任务: worker 首行就 xQueueReceive(s_photo_q);
+     * 反过来则 worker 可能读到 NULL。队列先于 worker 存在是安全的 */
+    s_photo_q = xQueueCreate(2, sizeof(photo_job_t));
+    if (s_photo_q && xTaskCreatePinnedToCore(photo_worker, "photo_wk", 8192,
+                                             NULL, 3, NULL, 1) != pdPASS) {
+        vQueueDelete(s_photo_q);
+        s_photo_q = NULL;
+    }
 }
 
 /* ================= 联网层 UI 桥 (pvc_net 回调, 任意任务可调) ================= */

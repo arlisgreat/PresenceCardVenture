@@ -104,6 +104,10 @@ static void wait_wifi(void)
  */
 static esp_err_t wifi_start(void)
 {
+    PVC_EV("heap_wifi internal=%u dma=%u largest=%u",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
@@ -151,6 +155,9 @@ static void net_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    /* WiFi(+配网期 BT) 内部内存已占位: 通知 main 补开相机 (见 pvc_net.h) */
+    if (s_ui.wifi_ready) s_ui.wifi_ready();
+
     wait_wifi();
     ESP_LOGI(TAG, "wifi connected");
 

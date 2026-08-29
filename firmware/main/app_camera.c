@@ -13,6 +13,7 @@
 
 #include "esp_log.h"
 #include "esp_camera.h"
+#include "bsp/m5stack_core_s3.h"   /* BSP_I2C_NUM: SCCB 复用 BSP I2C 总线 */
 
 #include "app_camera.h"
 
@@ -28,8 +29,11 @@ esp_err_t app_camera_init(void)
         .pin_pwdn      = -1,
         .pin_reset     = -1,
         .pin_xclk      = -1,
-        .pin_sscb_sda  = 12,
-        .pin_sscb_scl  = 11,
+        /* SCCB 与 PMIC/触摸共用 BSP 的 I2C1 (11/12): 引脚必须 NC +
+         * sccb_i2c_port 复用已装驱动, 自建总线会 acquire fail 且把触摸搞挂
+         * (真机实测: i2c.common acquire bus failed -> 触摸无响应) */
+        .pin_sscb_sda  = -1,
+        .pin_sscb_scl  = -1,
         .pin_d7        = 47,
         .pin_d6        = 48,
         .pin_d5        = 16,
@@ -53,10 +57,9 @@ esp_err_t app_camera_init(void)
         .fb_count      = 2,                /* 双缓冲, PSRAM */
         .fb_location   = CAMERA_FB_IN_PSRAM,
         .grab_mode     = CAMERA_GRAB_LATEST, /* 预览始终显示最新帧 */
-        .sccb_i2c_port = -1,               /* 复用 M5 In_I2C 释放后的 I2C0? 见下 */
+        .sccb_i2c_port = BSP_I2C_NUM,      /* =1, bsp_display_start 已装驱动 */
     };
 
-    /* CoreS3 的 SCCB 与 M5 In_I2C 共用 I2C0(11/12): BSP 初始化后直接可用 */
     esp_err_t err = esp_camera_init(&camera_config);
     if (err == ESP_OK) {
         s_ready = true;

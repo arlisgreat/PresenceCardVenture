@@ -61,6 +61,10 @@ typedef struct {
     /* feed 更新通知 (§3): total=缓存总数, fresh=本次新增,
      * new_likes=本人照片新增被赞数 (仪式感: 飘心/提示音) */
     void (*feed_update)(int total, int fresh, int new_likes);
+    /* WiFi 驱动初始化完成 (BLE 配网时 = 配网成功后)。真机内部 SRAM 紧张:
+     * 相机 DMA 必须等 WiFi(+配网期 BT) 的内部池先占位再开, 由此回调触发
+     * (net 任务上下文)。普通启动延迟 <1s; 配网页无预览本就合理 */
+    void (*wifi_ready)(void);
 } pvc_net_ui_t;
 
 /* 启动联网任务 (NVS init + WiFi STA + 配对 + 上传队列)。ui 可为 NULL。 */
