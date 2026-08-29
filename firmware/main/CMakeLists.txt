@@ -49,7 +49,7 @@ endforeach()
 idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                             "pvc_font_cn16.c"
                             "ui_beauty_camera.c" "pvc_power.c" "pvc_clock.c"
-                            "pvc_jpeg.c" "pvc_jpeg_dims.c" "pvc_sound.c" "pvc_algo_test.c" "pvc_face.cpp"
+                            "pvc_jpeg.c" "pvc_jpeg_dims.c" "pvc_sdio.c" "pvc_sound.c" "pvc_algo_test.c" "pvc_face.cpp"
                             "net/pvc_net.c" "net/pvc_store.c" "net/pvc_http.c"
                             "net/pvc_pair.c" "net/pvc_upload.c" "net/pvc_prov.c"
                             "net/pvc_feed.c" "net/pvc_config.c"

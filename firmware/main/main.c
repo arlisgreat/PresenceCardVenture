@@ -30,6 +30,7 @@
 #include "pvc_config.h"
 #include "pvc_power.h"
 #include "pvc_trace.h"
+#include "pvc_sdio.h"
 #include "pvc_clock.h"
 
 static const char *TAG = "main";
@@ -140,7 +141,10 @@ void app_main(void)
 
     /* 2. SD 卡: 相册 /sdcard/DCIM + 待传队列 /sdcard/queue。
      *    挂载失败不致命: 相册不可用, 待传队列降级 PSRAM。 */
+    /* SD 与 LCD 共享 SPI2: 挂载期间 LVGL 已在刷屏, 须持显示锁 (pvc_sdio.h) */
+    pvc_sd_lock();
     esp_err_t err = bsp_sdcard_mount();
+    pvc_sd_unlock();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "sdcard mount failed (%s): album off, RAM upload queue",
                  esp_err_to_name(err));

@@ -1,6 +1,7 @@
 #include "pvc_feed.h"
 #include "pvc_config.h"
 #include "pvc_ota.h"
+#include "pvc_sdio.h"    /* SD 与 LCD 共享 SPI2: 一切 SD I/O 须持锁 */
 #include "pvc_http.h"
 #include "pvc_store.h"
 #include "pvc_trace.h"
@@ -51,7 +52,7 @@ static void lock_init(void)
 }
 
 /* ---------------- SD 镜像 ---------------- */
-static void sd_save_slot(const slot_t *s)
+static void sd_save_slot_impl(const slot_t *s)
 {
     char path[96];
     snprintf(path, sizeof(path), FEED_DIR "/%s.jpg", s->meta.photo_id);
@@ -67,7 +68,14 @@ static void sd_save_slot(const slot_t *s)
     fclose(f);
 }
 
-static void sd_sync_index(void)
+static void sd_save_slot(const slot_t *s)
+{
+    pvc_sd_lock();
+    sd_save_slot_impl(s);
+    pvc_sd_unlock();
+}
+
+static void sd_sync_index_impl(void)
 {
     mkdir(FEED_DIR, 0755);
     FILE *f = fopen(IDX_PATH, "w");
@@ -102,9 +110,25 @@ static void sd_sync_index(void)
     closedir(d);
 }
 
+static void sd_sync_index(void)
+{
+    pvc_sd_lock();
+    sd_sync_index_impl();
+    pvc_sd_unlock();
+}
+
+static void feed_restore_impl(void);
+
 void pvc_feed_init(void)
 {
     lock_init();
+    pvc_sd_lock();
+    feed_restore_impl();
+    pvc_sd_unlock();
+}
+
+static void feed_restore_impl(void)
+{
     FILE *idx = fopen(IDX_PATH, "r");
     if (!idx) return;
 

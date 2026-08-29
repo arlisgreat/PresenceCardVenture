@@ -2,6 +2,7 @@
 #include "pvc_http.h"
 #include "pvc_store.h"
 #include "pvc_trace.h"
+#include "pvc_sdio.h"    /* SD 与 LCD 共享 SPI2: 一切 SD I/O 须持锁 */
 
 #include <string.h>
 #include <stdio.h>
@@ -71,8 +72,12 @@ void pvc_upload_init(void)
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
 
     /* 重启补传 (§2): 扫描遗留队列文件, 从文件名还原幂等键 */
+    pvc_sd_lock();
     DIR *d = opendir(QUEUE_DIR);
-    if (!d) return;                    /* 无 SD 卡 / 目录不存在: RAM 模式 */
+    if (!d) {                          /* 无 SD 卡 / 目录不存在: RAM 模式 */
+        pvc_sd_unlock();
+        return;
+    }
     struct dirent *ent;
     int n = 0;
     while ((ent = readdir(d)) != NULL) {
@@ -95,6 +100,7 @@ void pvc_upload_init(void)
         n++;
     }
     closedir(d);
+    pvc_sd_unlock();
     if (n) ESP_LOGI(TAG, "restored %d pending photo(s) from %s", n, QUEUE_DIR);
 }
 
@@ -115,7 +121,8 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
     it->beauty = (beauty < 0) ? 0 : (beauty > 100 ? 100 : beauty);
     if (caption) strncpy(it->caption, caption, sizeof(it->caption) - 1);
 
-    /* 优先落盘 (断电不丢) */
+    /* 优先落盘 (断电不丢); SD I/O 全程持锁 (与 LCD 共享 SPI2) */
+    pvc_sd_lock();
     mkdir(QUEUE_DIR, 0755);
     snprintf(it->path, sizeof(it->path), QUEUE_DIR "/%lu_%lu_%s.jpg",
              (unsigned long)boot, (unsigned long)seq, it->filter);
@@ -124,6 +131,7 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
         size_t wr = fwrite(jpg, 1, len, f);
         fclose(f);
         if (wr == len) {
+            pvc_sd_unlock();
             list_append(it);
             PVC_EV("upload_queued key=%s bytes=%u store=sd depth=%d",
                    it->key, (unsigned)len, pvc_upload_depth());
@@ -131,6 +139,7 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
         }
         remove(it->path);
     }
+    pvc_sd_unlock();
 
     /* SD 不可用: 降级 PSRAM 驻留 */
     it->path[0] = '\0';
@@ -168,18 +177,20 @@ static uint8_t *item_load(up_item_t *it, size_t *len, bool *from_file)
         return it->buf;
     }
     *from_file = true;
+    pvc_sd_lock();
     FILE *f = fopen(it->path, "rb");
-    if (!f) return NULL;
+    if (!f) { pvc_sd_unlock(); return NULL; }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (sz <= 0) { fclose(f); return NULL; }
+    if (sz <= 0) { fclose(f); pvc_sd_unlock(); return NULL; }
     uint8_t *buf = heap_caps_malloc((size_t)sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (buf && fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
         heap_caps_free(buf);
         buf = NULL;
     }
     fclose(f);
+    pvc_sd_unlock();
     *len = (size_t)sz;
     return buf;
 }
@@ -246,7 +257,11 @@ pvc_up_result_t pvc_upload_drain(void)
         uint8_t *jpg = item_load(it, &len, &from_file);
         if (!jpg) {
             ESP_LOGE(TAG, "load %s failed, dropping", it->path);
-            if (it->path[0]) remove(it->path);
+            if (it->path[0]) {
+                pvc_sd_lock();
+                remove(it->path);
+                pvc_sd_unlock();
+            }
             list_remove(it);
             it = next;
             continue;
@@ -283,7 +298,11 @@ pvc_up_result_t pvc_upload_drain(void)
 
         if (auth_fail) return PVC_UP_AUTH_FAIL;
         if (done) {
-            if (it->path[0]) remove(it->path);
+            if (it->path[0]) {
+                pvc_sd_lock();
+                remove(it->path);
+                pvc_sd_unlock();
+            }
             list_remove(it);
         } else {
             PVC_EV("upload_defer key=%s", it->key);

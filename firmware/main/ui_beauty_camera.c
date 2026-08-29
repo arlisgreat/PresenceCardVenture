@@ -57,6 +57,7 @@
 #include "ccd_assets/ccd_luts.h"
 #include "pvc_sound.h"
 #include "pvc_face.h"
+#include "pvc_sdio.h"
 #include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
@@ -586,8 +587,12 @@ static void photo_worker(void *arg)
             /* QVGA 统一后相册与上传是同一份 q90 编码, 一次编码两用 */
             alen = pvc_jpeg_encode_yuv422(yuyv, pw, ph, 90, s_wk_enc, WK_ENC_CAP);
             if (alen) {
+                /* SD 与 LCD 共享 SPI2: worker 写卡须持显示锁 (pvc_sdio.h) */
+                pvc_sd_lock();
                 mkdir("/sdcard/DCIM", 0755);
-                if (!write_file(path, s_wk_enc, alen)) {
+                bool saved = write_file(path, s_wk_enc, alen);
+                pvc_sd_unlock();
+                if (!saved) {
                     /* 无 SD 卡: 相册兜底进 PSRAM 环 (最近 6 张) */
                     ram_album_push(s_wk_enc, alen);
                 }
