@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>相框 · 从配对到第一颗星星的 35 秒</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* §7 七色 token（量化规范） */
+  --paper:#FDFBF5;   /* paper_white  全局底 + 拍立得白框 */
+  --lilac:#C7B8EE;   /* lilac_purple 昵称贴纸底 */
+  --cream:#F5D76E;   /* cream_yellow 星星 / 粒子 */
+  --pink:#F7A8C8;    /* candy_pink   点赞高亮 / 触摸涟漪 / 绑定成功 */
+  --sky:#2F7DE0;     /* accent_sky_blue 配对码大字 / 时间戳 */
+  --grass:#3E7A3A;   /* grass_green  配对/设置面板底 */
+  --night:#1A1D1A;   /* dark_night   夜间底 + 60% 遮罩 */
+  --bench:#E7E9E4; --panel:#F6F7F4; --ink:#22282A; --ink-2:#5C666B; --line:#C6CDC6;
+  --mono:'IBM Plex Mono',Consolas,monospace;
+  --body:'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif;
+  --cute:'ZCOOL KuaiLe','Noto Sans SC',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bench);color:var(--ink);
+  font-family:var(--body);font-size:15px;line-height:1.6;
+  padding:clamp(16px,4vw,48px);
+  background-image:radial-gradient(circle at 1px 1px, rgba(34,40,42,.05) 1px, transparent 0);
+  background-size:22px 22px;
+}
+button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
+:focus-visible{outline:2px solid var(--sky);outline-offset:2px;border-radius:4px}
+main,header{max-width:1000px;margin:0 auto}
+
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--ink-2);
+  text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.eyebrow::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--pink);
+  animation:blink 2.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+h1{font-family:var(--cute);font-weight:400;font-size:clamp(26px,4.4vw,42px);
+  line-height:1.2;margin:14px 0 8px;letter-spacing:.02em}
+h1 b{color:var(--sky);font-weight:400}
+.sub{color:var(--ink-2);max-width:62ch;margin-bottom:24px}
+.sub code{font-family:var(--mono);font-size:12px}
+
+/* ── 相框 ─────────────────────────── */
+.stagebox{width:832px;max-width:none}
+.bezel{background:linear-gradient(160deg,#2B2A27,#161512);padding:16px;border-radius:22px;
+  box-shadow:0 24px 50px -24px rgba(26,29,26,.6), 0 1px 0 rgba(255,255,255,.08) inset;
+  width:832px}
+.stage{
+  position:relative;width:800px;height:480px;overflow:hidden;
+  background:var(--paper);border-radius:6px;
+}
+.stage.noanim *, .stage.noanim{animation-duration:.01ms !important;transition-duration:0ms !important}
+
+/* ── 幕一 · 配对面板（grass_green，照片区不用绿） ── */
+.pairpanel{position:absolute;inset:0;background:var(--grass);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
+  opacity:0;pointer-events:none;transition:opacity .8s;z-index:30}
+.stage.pairing .pairpanel{opacity:1}
+.pairpanel .pp-kicker{font-family:var(--mono);font-size:12px;letter-spacing:.22em;color:#CFE3CC}
+.pairpanel h3{font-family:var(--cute);font-weight:400;font-size:34px;color:#F4F1E6;margin:10px 0 4px}
+.pairpanel .pp-sub{font-size:13.5px;color:#CFE3CC;margin-bottom:26px}
+.code{display:flex;gap:10px;transition:opacity .4s,transform .4s}
+.stage.boundflash .code,.stage.boundflash .pp-note{opacity:0;transform:translateY(8px);pointer-events:none}
+.digit{width:64px;height:88px;border-radius:12px;background:#F4F1E6;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-weight:500;font-size:52px;color:var(--sky);
+  transform:scale(0);box-shadow:3px 3px 0 rgba(26,29,26,.28)}
+.stage.pairing .digit{animation:digitpop .45s cubic-bezier(.2,1.1,.3,1.3) forwards}
+.stage.pairing .digit:nth-child(1){animation-delay:.15s}
+.stage.pairing .digit:nth-child(2){animation-delay:.30s}
+.stage.pairing .digit:nth-child(3){animation-delay:.45s}
+.stage.pairing .digit:nth-child(4){animation-delay:.60s}
+.stage.pairing .digit:nth-child(5){animation-delay:.75s}
+.stage.pairing .digit:nth-child(6){animation-delay:.90s}
+@keyframes digitpop{0%{transform:scale(0) rotate(-8deg)}70%{transform:scale(1.08) rotate(2deg)}100%{transform:scale(1)}}
+.pairpanel .pp-note{margin-top:22px;font-size:12.5px;color:#B9D2B6;display:flex;align-items:center;gap:8px;
+  transition:opacity .4s,transform .4s}
+.pairpanel .pp-note::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--pink);
+  animation:breath 2.2s ease-in-out infinite}
+/* 绑定成功：candy_pink 对勾 + 归属行 */
+.boundok{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;opacity:0;transition:opacity .3s;background:var(--night);z-index:40}
+.stage.boundflash .boundok{opacity:1}
+.okmark{width:86px;height:86px;border-radius:50%;background:var(--pink);
+  display:flex;align-items:center;justify-content:center;font-size:44px;color:#fff;
+  box-shadow:0 0 0 8px rgba(247,168,200,.25);transform:scale(0)}
+.stage.boundflash .okmark{animation:okpop .6s cubic-bezier(.2,1.2,.3,1.35) .1s forwards}
+@keyframes okpop{0%{transform:scale(0)}70%{transform:scale(1.12)}100%{transform:scale(1)}}
+.oktext{font-family:var(--cute);font-size:24px;color:#F4F1E6}
+.oksub{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:#B9D2B6}
+
+/* ── 幕二 · 待机时钟（零 UI 原则：只有时间戳） ── */
+.clockbox{position:absolute;inset:0;display:flex;flex-direction:column;gap:6px;
+  align-items:center;justify-content:center;opacity:0;transition:opacity .7s;z-index:5}
+.stage.idle .clockbox{opacity:1}
+.clockbox .time{font-family:var(--mono);font-weight:500;font-size:88px;color:var(--sky);letter-spacing:.04em}
+.clockbox .date{font-size:16px;color:var(--ink-2);letter-spacing:.2em}
+.clockbox .wait{margin-top:14px;font-size:13px;color:var(--ink-2);display:flex;gap:8px;align-items:center}
+.clockbox .wait::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--pink);
+  animation:breath 2.2s ease-in-out infinite}
+@keyframes breath{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.5);opacity:.4}}
+.stage.night .clockbox{color:#8A948C}
+.stage.night .clockbox .date,.stage.night .clockbox .wait{color:#8A948C}
+
+/* ── 拍立得：状态类挂在元素自身（轮播要两张独立） ── */
+.polaroid{
+  position:absolute;left:50%;top:50%;width:330px;height:290px;
+  margin-left:-165px;margin-top:-145px;
+  background:#fff;border-radius:5px;
+  box-shadow:0 20px 44px -18px rgba(26,29,26,.5);
+  opacity:0;z-index:10;
+  transition:left .95s cubic-bezier(.35,0,.15,1), top .95s cubic-bezier(.35,0,.15,1),
+             width .95s cubic-bezier(.35,0,.15,1), height .95s cubic-bezier(.35,0,.15,1),
+             margin .95s cubic-bezier(.35,0,.15,1), border-radius .95s, transform .95s cubic-bezier(.35,0,.15,1);
+}
+.polaroid.arrived{animation:floatin 1.05s cubic-bezier(.22,.9,.28,1.12) forwards}
+@keyframes floatin{
+  0%{opacity:0;transform:translate(360px,-300px) rotate(10deg) scale(.7)}
+  62%{opacity:1;transform:translate(0,6px) rotate(-3.6deg) scale(1.01)}
+  82%{transform:translate(0,-2px) rotate(-1.4deg)}
+  100%{opacity:1;transform:rotate(-2deg)}
+}
+.polaroid.settled{animation:none;opacity:1;transform:rotate(-2deg)}
+.polaroid.fullscreen{
+  animation:none;opacity:1;transform:rotate(0);
+  left:0;top:0;margin:0;width:800px;height:480px;border-radius:0;box-shadow:none;
+}
+.shot{position:absolute;inset:12px 12px 46px;overflow:hidden;border-radius:2px;background:#EAE7DE;
+  transition:inset .95s cubic-bezier(.35,0,.15,1), border-radius .95s}
+.polaroid.fullscreen .shot{inset:0;border-radius:0}
+.ph{position:absolute;inset:0}
+.polcap{position:absolute;left:0;right:0;bottom:11px;text-align:center;
+  font-family:var(--cute);font-size:19px;color:#6B6459;transition:opacity .8s}
+.polaroid.fullscreen .polcap{color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.55);bottom:16px}
+.polaroid.zeroui .polcap{opacity:0}
+
+/* 昵称贴纸：lilac + 1px 白边 + 2px 硬阴影 + -2° */
+.sticker{
+  position:absolute;left:-16px;bottom:56px;
+  font-family:var(--cute);font-size:21px;color:#3D3357;
+  background:var(--lilac);border:1.5px solid #fff;border-radius:9px;
+  padding:5px 16px;transform:rotate(-2deg) scale(0);
+  box-shadow:2px 2px 0 rgba(26,29,26,.30);
+  transition:left .95s cubic-bezier(.35,0,.15,1), bottom .95s cubic-bezier(.35,0,.15,1), opacity .8s;
+}
+.polaroid.stickered .sticker{animation:stick .7s cubic-bezier(.2,1.1,.3,1.25) forwards}
+@keyframes stick{
+  0%{transform:rotate(14deg) scale(0)}
+  70%{transform:rotate(-4deg) scale(1.12)}
+  100%{transform:rotate(-2deg) scale(1)}
+}
+.polaroid.fullscreen .sticker{left:22px;bottom:22px}
+.polaroid.zeroui .sticker{opacity:0}
+
+/* 瞬时动画在定格帧不可见：freeze 模式下整体慢放（动画/过渡时长放大，帧采样落在中段） */
+.stage.slowmo .fing{animation-duration:18s}
+.stage.slowmo .ripple{animation-duration:15s}
+.stage.slowmo .star{animation-duration:17s}
+.stage.slowmo .pt{animation-duration:19s}
+.stage.slowmo .count{animation-duration:12s}
+.stage.slowmo .okmark{animation-duration:12s}
+.stage.slowmo .digit{animation-duration:9s}
+.stage.slowmo .pp-kicker,.stage.slowmo h3,.stage.slowmo .pp-sub{transition:none}
+.stage.slowmo .pairpanel,.stage.slowmo .boundok,.stage.slowmo .clockbox,.stage.slowmo .nightclock{transition-duration:20s}
+.stage.slowmo .nightdim{transition-duration:12s}
+.stage.slowmo .polaroid{transition-duration:19s}
+.stage.slowmo .shot{transition-duration:19s}
+.stage.slowmo .sticker{transition:opacity 16s}
+.stage.slowmo .polcap{transition:opacity 16s}
+.stage.slowmo .touchdot{transition-duration:10s}
+/* 硬冻结：停掉所有动画，瞬时层直接呈现终态（截图/设计审查用，deterministic）。
+   关键坑：不能给 transition 加 delay——虚拟时间下 delay 会被快进消费掉，
+   导致过渡"瞬间完成"。正确做法：hardfreeze 期间根本不触发过渡，
+   由 JS 在类全部应用完后一次性强制 reflow，再解除动画/过渡抑制。
+   合成器坑（第 4 轮实测）：.noanim 移除瞬间过渡从旧值起跑、被 noanim 压住的
+   CSS 动画复活，headless 捕获的是起跑帧——所以下面 (a)(b) 两类终态都要钉死。 */
+.stage.noanim *, .stage.noanim{animation:none !important;transition:none !important}
+/* (a) 状态过渡层按类组合把 opacity 钉在目标值（.noanim 全程保留，这些规则
+   负责让元素呈现该节拍应有的可见状态） */
+.stage.hardfreeze .pairpanel{opacity:0 !important}
+.stage.hardfreeze.pairing .pairpanel{opacity:1 !important}
+.stage.hardfreeze.boundflash .boundok{opacity:1 !important}
+.stage.hardfreeze.idle .clockbox{opacity:1 !important}
+.stage.hardfreeze.night .nightdim{opacity:.6 !important}
+.stage.hardfreeze.night .nightclock{opacity:1 !important}
+.stage.hardfreeze.starred .touchdot{opacity:1 !important}
+.stage.hardfreeze.starfade .touchdot{opacity:0 !important}
+/* (b) CSS 动画驱动的 transform/opacity：显式终态（noanim 已压住动画，这里补终态） */
+.stage.hardfreeze .digit{animation:none !important;transform:scale(1) !important}
+.stage.hardfreeze .okmark{animation:none !important;transform:scale(1) !important}
+.stage.hardfreeze.boundflash .code,.stage.hardfreeze.boundflash .pp-note{opacity:0 !important;transform:translateY(8px) !important}
+.stage.hardfreeze .polaroid.arrived{animation:none !important;opacity:1;transform:rotate(-2deg)}
+.stage.hardfreeze .polaroid.stickered .sticker{animation:none !important;transform:rotate(-2deg) scale(1) !important}
+.stage.hardfreeze .polaroid.zeroui .sticker,.stage.hardfreeze .polaroid.zeroui .polcap{animation:none !important;opacity:0 !important}
+.stage.hardfreeze .fing{animation:none !important;transform:scale(.8);opacity:1}
+.stage.hardfreeze .ripple{animation:none !important;opacity:.55;transform:scale(1.4)}
+.stage.hardfreeze .star{animation:none !important;transform:scale(1);text-shadow:0 0 22px var(--pink)}
+.stage.hardfreeze .pt{animation:none !important;opacity:.85;transform:translate(var(--dx),var(--dy)) scale(.7)}
+.stage.hardfreeze .count{animation:none !important;opacity:1;transform:none}
+.stage.slowmo .polaroid.arrived{animation-duration:21s}
+.stage.slowmo .polaroid.stickered .sticker{animation-duration:14s}
+
+/* ── 幕四 · 点星星：GT911 触点涟漪 → cream 星 + candy_pink ── */
+.touchdot{position:absolute;left:660px;top:380px;width:0;height:0;z-index:25;opacity:0;transition:opacity .5s}
+.stage.starfade .touchdot{opacity:0 !important}
+.stage.starred .touchdot{opacity:1}
+.fing{position:absolute;left:-16px;top:-16px;width:32px;height:32px;border-radius:50%;
+  background:rgba(247,168,200,.35);border:2px solid var(--pink);
+  animation:press .9s ease-out .1s both}
+@keyframes press{0%{transform:scale(1.6);opacity:0}30%{transform:scale(.8);opacity:1}70%{transform:scale(.8);opacity:1}100%{transform:scale(.8);opacity:0}}
+.ripple{position:absolute;left:-34px;top:-34px;width:68px;height:68px;border-radius:50%;
+  border:3px solid var(--pink);opacity:0;transform:scale(.2)}
+.stage.starred .ripple{animation:rip .75s ease-out .25s forwards}
+@keyframes rip{0%{opacity:.9;transform:scale(.2)}100%{opacity:0;transform:scale(2.6)}}
+.star{position:absolute;left:-30px;top:-34px;font-size:56px;color:var(--cream);
+  text-shadow:0 0 0 transparent;transform:scale(0);line-height:1}
+.stage.starred .star{animation:starpop .85s cubic-bezier(.2,.9,.3,1.4) .35s forwards}
+@keyframes starpop{
+  0%{transform:scale(0) rotate(-40deg)}
+  60%{transform:scale(1.28) rotate(6deg);text-shadow:0 0 22px var(--pink)}
+  100%{transform:scale(1) rotate(0);text-shadow:0 2px 10px rgba(247,168,200,.65)}
+}
+.pt{position:absolute;left:-4px;top:-8px;width:9px;height:9px;border-radius:50%;
+  background:var(--cream);opacity:0}
+.pt:nth-child(odd){background:var(--pink)}
+.stage.starred .pt{animation:part .95s ease-out .45s forwards}
+@keyframes part{0%{opacity:1;transform:translate(0,0) scale(1)}
+  100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(.3)}}
+.count{position:absolute;right:70px;top:-40px;font-family:var(--mono);font-size:15px;
+  background:rgba(253,251,245,.92);color:var(--ink);border-radius:999px;padding:4px 13px;
+  opacity:0;white-space:nowrap;box-shadow:0 4px 14px -6px rgba(26,29,26,.4)}
+.count b{color:#D9A400}
+.stage.starred .count{animation:cpop .6s cubic-bezier(.2,1,.3,1.3) .6s forwards}
+@keyframes cpop{0%{opacity:0;transform:translateY(10px) scale(.7)}100%{opacity:1;transform:none}}
+
+/* ── 幕六 · 夜间：dark_night 60% 遮罩（固件=背光 PWM 降到 40%） ── */
+.nightdim{position:absolute;inset:0;background:var(--night);opacity:0;
+  transition:opacity .6s;pointer-events:none;z-index:20}
+.stage.night .nightdim{opacity:.6}
+.nightclock{position:absolute;left:0;right:0;bottom:26px;text-align:center;z-index:21;
+  opacity:0;transition:opacity .8s .2s;font-family:var(--mono);color:#E8E5DC}
+.stage.night .nightclock{opacity:1}
+.nightclock .nt{font-size:34px;letter-spacing:.06em}
+.nightclock .nd{font-size:12px;color:#8A948C;letter-spacing:.3em;margin-top:4px}
+
+/* ── 控制行 ── */
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px}
+.controls .chip{
+  border:1px solid var(--line);background:var(--panel);border-radius:8px;
+  padding:8px 14px;font-size:13px;color:var(--ink-2);
+  font-family:var(--mono);transition:color .2s,border-color .2s}
+.controls .chip .t{font-size:10px;opacity:.65;margin-right:7px}
+.controls .chip.active{color:var(--ink);border-color:var(--ink)}
+.controls .spacer{flex:1}
+.controls .night-t{border:1px solid var(--line);background:var(--night);color:#E8E5DC;
+  border-radius:8px;padding:8px 14px;font-size:13px}
+.controls .night-t.on{border-color:var(--cream);color:var(--cream)}
+
+/* ── 节拍表 ── */
+.beats{margin-top:40px}
+h2{font-family:var(--cute);font-weight:400;font-size:22px;margin-bottom:4px}
+h2 + p{color:var(--ink-2);font-size:13px;margin-bottom:14px;max-width:70ch}
+table{border-collapse:collapse;width:100%;background:var(--panel);
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13px}
+th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-2);font-weight:500}
+td:first-child{font-family:var(--mono);color:var(--sky);white-space:nowrap}
+td code{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+td small{display:block;color:var(--ink-2);font-size:11.5px;line-height:1.5;margin-top:3px}
+
+/* ── 色板 ── */
+.tokens{margin-top:40px}
+.token-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+.tok{display:flex;gap:12px;align-items:center;background:var(--panel);
+  border:1px solid var(--line);border-radius:11px;padding:10px 12px}
+.tok .sw{width:40px;height:40px;border-radius:9px;flex:none;box-shadow:0 0 0 1px rgba(34,40,42,.12) inset}
+.tok b{display:block;font-family:var(--mono);font-size:11.5px;font-weight:500}
+.tok small{display:block;font-size:11px;color:var(--ink-2);line-height:1.45}
+
+.rules{margin-top:34px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.rules i{font-style:normal;font-family:var(--mono);font-size:11px;color:var(--ink-2);
+  border:1px solid var(--line);border-radius:999px;padding:5px 13px;background:var(--panel)}
+.foot{margin-top:20px;text-align:center;font-family:var(--mono);font-size:10px;
+  color:var(--ink-2);letter-spacing:.08em}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">PresenceCard · 相框动效原型 v2 · 800×480 · Sunton ESP32-8048S043C</div>
+  <h1>从配对到第一颗星星的 <b>35 秒</b></h1>
+  <p class="sub">一鱼三吃：直接录屏 = 演示视频；Web UI 的视觉基准（千禧/CCD 贴纸风，七色 token）；相框动效的移植蓝本。
+    完整六幕：<b>配对 → 待机 → 照片飘入 → 点星星 → 下一张压上来 → 夜间</b>。节拍表在下方，时间轴可直接搬进 C++。
+    动效曲线为占位值，待量化规范 §4 定稿后替换。照片全屏时<b>零 UI</b>——色彩只在配对页、到达瞬间与点赞反馈出现。</p>
+</header>
+
+<main>
+  <div class="stagebox" id="stagebox">
+    <div class="bezel">
+      <div class="stage" id="stage" aria-label="相框演示画面">
+
+        <!-- 幕一 · 配对面板（grass_green） -->
+        <div class="pairpanel">
+          <div class="pp-kicker">PRESENCECARD · 开机配对</div>
+          <h3>把相框连上你的小卡</h3>
+          <div class="pp-sub">在小卡的 web 社区输入这 6 位配对码 · POST /pair/code → pair_code</div>
+          <div class="code">
+            <span class="digit">4</span><span class="digit">8</span><span class="digit">2</span><span class="digit">9</span><span class="digit">1</span><span class="digit">3</span>
+          </div>
+          <div class="pp-note">GET /pair/status · 202 pending · 每 3 秒轮询</div>
+        </div>
+        <div class="boundok">
+          <div class="okmark">✓</div>
+          <div class="oktext">已绑定 · 阿岩的相框</div>
+          <div class="oksub">GET /pair/status · 200 bound</div>
+        </div>
+
+        <!-- 幕二 · 待机（零 UI：只有时间戳） -->
+        <div class="clockbox">
+          <div class="time">09:31</div>
+          <div class="date">8 月 30 日 · 周六</div>
+          <div class="wait">已绑定 · 等照片飘来</div>
+        </div>
+
+        <!-- 幕三/五 · 拍立得（两张，JS 轮换） -->
+        <div class="polaroid" id="polA">
+          <div class="shot"><div class="ph ph-cloud"></div></div>
+          <div class="polcap">今天的云</div>
+          <div class="sticker">墨墨</div>
+        </div>
+        <div class="polaroid" id="polB">
+          <div class="shot"><div class="ph ph-court"></div></div>
+          <div class="polcap">傍晚的操场</div>
+          <div class="sticker">阿岩</div>
+        </div>
+
+        <!-- 幕四 · 点星星（GT911 触点 → 涟漪 → 星星） -->
+        <div class="touchdot">
+          <div class="fing"></div>
+          <div class="ripple"></div>
+          <span class="pt" style="--dx:44px;--dy:-30px"></span>
+          <span class="pt" style="--dx:-38px;--dy:-40px"></span>
+          <span class="pt" style="--dx:52px;--dy:14px"></span>
+          <span class="pt" style="--dx:-50px;--dy:8px"></span>
+          <span class="pt" style="--dx:10px;--dy:-56px"></span>
+          <span class="pt" style="--dx:-14px;--dy:42px"></span>
+          <div class="star">★</div>
+          <div class="count"><b>★</b> 阿岩 点了星星</div>
+        </div>
+
+        <!-- 幕六 · 夜间 -->
+        <div class="nightdim"></div>
+        <div class="nightclock">
+          <div class="nt">23:47</div>
+          <div class="nd">夜间模式 · 背光 40%</div>
+        </div>
+
+      </div>
+    </div>
+    <div class="controls" id="controls">
+      <button class="chip" data-t="0"><span class="t">00.0</span>配对</button>
+      <button class="chip" data-t="6200"><span class="t">06.2</span>待机</button>
+      <button class="chip" data-t="9000"><span class="t">09.0</span>照片飘入</button>
+      <button class="chip" data-t="17000"><span class="t">17.0</span>点星星</button>
+      <button class="chip" data-t="22400"><span class="t">22.4</span>下一张</button>
+      <button class="chip" data-t="30000"><span class="t">30.0</span>夜间</button>
+      <span class="spacer"></span>
+      <button class="night-t" id="nightBtn">🌙 夜间 60% 遮罩</button>
+    </div>
+  </div>
+
+  <section class="beats">
+    <h2>节拍表（移植给固件的时间轴 · 规格见 docs/07-frame-motion-spec.md）</h2>
+    <p>相框端淡入用背光 PWM 渐变实现，不做全屏 alpha 混合；曲线列待 §4 定稿。
+      录屏：完整故事取 00.0–34.8s 一整圈；只要"相框日常"取 06.2–34.8s。
+      URL 控制 <code>#t=13300</code> 从该时刻播，<code>#t=13300,freeze</code> 定格截图。</p>
+    <table>
+      <tr><th>t</th><th>节拍</th><th>动效</th><th>占位曲线</th><th>固件移植要点</th></tr>
+      <tr><td>00.0s</td><td>配对</td><td>grass_green 面板；配对码 482913 逐位弹入（accent_sky_blue）<small>POST /pair/code → pair_code</small></td><td><code>cubic-bezier(.2,1.1,.3,1.3) · 0.45s ×6</code></td><td>纯色刷整屏；数字用现有 CJK 字模放大</td></tr>
+      <tr><td>04.2s</td><td>绑定成功</td><td>candy_pink 对勾弹出 + "已绑定 · 阿岩的相框"<small>轮询 202 pending → 200 bound</small></td><td><code>cubic-bezier(.2,1.2,.3,1.35) · 0.6s</code></td><td>成功后背光 PWM 整屏渐暗再亮切到待机</td></tr>
+      <tr><td>06.2s</td><td>待机</td><td>paper_white 底 + 09:31 时间戳 + candy_pink 呼吸点<small>每 10s GET /device/state，unseen_count 门控</small></td><td><code>ease-in-out · 2.2s 循环</code></td><td>固件现状，零新增工作</td></tr>
+      <tr><td>09.0s</td><td>照片飘入</td><td>拍立得从右上飘落，过冲两次停在 -2°；lilac 贴纸弹出；手写字题注<small>GET /feed → 下载 JPEG → 解码</small></td><td><code>(.22,.9,.28,1.12) · 1.05s</code> / <code>(.2,1.1,.3,1.25) · 0.7s</code></td><td>新图到位前先 PWM 渐暗，避免半解码帧露出</td></tr>
+      <tr><td>13.0s</td><td>铺满全屏</td><td>白框收进边缘，照片铺满 800×480；1.6s 后贴纸/题注淡出（零 UI）</td><td><code>(.35,0,.15,1) · 0.95s</code> / 淡出 linear 0.8s</td><td>全屏化=裁剪重排，RGB565 直驱不做 alpha 混合</td></tr>
+      <tr><td>17.0s</td><td>点星星</td><td>GT911 触点涟漪（candy_pink）→ cream 星星 + 6 粒子 + 气泡；2.1s 后淡出<small>POST /photos/{id}/reactions {type:"heart"}</small></td><td>涟漪 ease-out 0.75s / <code>(.2,.9,.3,1.4) · 0.85s</code></td><td>触摸按下即画涟漪，不等服务器回包；失败静默重试</td></tr>
+      <tr><td>22.4s</td><td>下一张压上来</td><td>新拍立得以同样动效压在旧照片正上方 → 铺满全屏 → 零 UI</td><td>同"照片飘入"</td><td>旧图留在帧缓冲底层，新图在其上动画，无需全清</td></tr>
+      <tr><td>30.0s</td><td>夜间</td><td>dark_night 60% 遮罩压上照片，底部浮出夜间时钟<small>定时 22:00–07:00（待产品确认）</small></td><td><code>linear · 0.6s</code></td><td>遮罩=背光 PWM 降到 40%，LCD 不重绘，最省电</td></tr>
+      <tr><td>34.8s</td><td>循环</td><td>回到配对幕（演示用；真机只循环 待机→照片→夜间）</td><td>—</td><td>—</td></tr>
+    </table>
+  </section>
+
+  <section class="tokens">
+    <h2>七色 token（量化规范 §7 → 相框角色）</h2>
+    <p>Web UI 与相框共用这一套千禧/CCD 贴纸风；照片区内除到达/点赞瞬间不出现任何色彩。</p>
+    <div class="token-grid">
+      <div class="tok"><span class="sw" style="background:#FDFBF5"></span><span><b>paper_white #FDFBF5</b><small>全局底色 + 拍立得白框</small></span></div>
+      <div class="tok"><span class="sw" style="background:#C7B8EE"></span><span><b>lilac_purple #C7B8EE</b><small>昵称贴纸底（-2° · 1px 白边 · 2px 硬阴影）</small></span></div>
+      <div class="tok"><span class="sw" style="background:#F5D76E"></span><span><b>cream_yellow #F5D76E</b><small>点赞星星、到达粒子</small></span></div>
+      <div class="tok"><span class="sw" style="background:#F7A8C8"></span><span><b>candy_pink #F7A8C8</b><small>点赞高亮、触摸涟漪、绑定成功对勾</small></span></div>
+      <div class="tok"><span class="sw" style="background:#2F7DE0"></span><span><b>accent_sky_blue #2F7DE0</b><small>配对码大字、时间戳</small></span></div>
+      <div class="tok"><span class="sw" style="background:#3E7A3A"></span><span><b>grass_green #3E7A3A</b><small>配对 / 设置面板主题底（照片区不用）</small></span></div>
+      <div class="tok"><span class="sw" style="background:#1A1D1A"></span><span><b>dark_night #1A1D1A</b><small>夜间模式底 + 60% 遮罩（背光 PWM 40%）</small></span></div>
+    </div>
+  </section>
+
+  <footer class="rules">
+    <i>照片全屏时零 UI</i><i>动效 HTML 定稿再进 C++</i><i>相框淡入 = 背光 PWM 渐变</i><i>GT911 触摸 → 点星星</i><i>接口问题不自己扛</i>
+  </footer>
+  <p class="foot">PRESENCECARDVENTURE · FRAME MOTION PROTOTYPE v2 · 800×480 · 录屏取 00.0s–34.8s 一个循环</p>
+</main>
+
+<style>
+/* 照片（纯 CSS 场景，无外链图） */
+.ph-cloud{background:linear-gradient(180deg,#8FBDE0 0%,#BAD8EC 55%,#E8F1F4 100%)}
+.ph-cloud::before,.ph-cloud::after{content:"";position:absolute;border-radius:50%;background:rgba(255,255,255,.92);filter:blur(1px)}
+.ph-cloud::before{width:46%;height:34%;left:14%;top:24%;box-shadow:22px 8px 0 6px rgba(255,255,255,.85)}
+.ph-cloud::after{width:30%;height:22%;right:10%;top:48%;box-shadow:-14px 6px 0 4px rgba(255,255,255,.8)}
+.ph-court{background:linear-gradient(180deg,#F2B379 0%,#E38B66 46%,#7E5E6C 78%,#4C4258 100%)}
+.ph-court::before{content:"";position:absolute;width:26%;height:26%;border-radius:50%;
+  background:radial-gradient(circle,#FFE9C4 30%,#F7C888 70%);left:58%;top:16%;filter:blur(2px)}
+.ph-court::after{content:"";position:absolute;left:0;right:0;bottom:0;height:26%;
+  background:linear-gradient(180deg,transparent,rgba(30,24,40,.55))}
+</style>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const stage = $('#stage'), box = $('#stagebox');
+const pols = [$('#polA'), $('#polB')];
+const chips = [...document.querySelectorAll('.controls .chip')];
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const STAGE_FLAGS = ['pairing','boundflash','idle','starred','starfade','night'];
+const POL_FLAGS = ['arrived','settled','stickered','fullscreen','zeroui'];
+let timers = [];
+
+function resetAll() {
+  STAGE_FLAGS.forEach(f => stage.classList.remove(f));
+  pols.forEach(p => POL_FLAGS.forEach(f => p.classList.remove(f)));
+}
+function polReset(p) { POL_FLAGS.forEach(f => p.classList.remove(f)); }
+
+/* 时间轴（与 spec §3 / 页面节拍表一致） */
+const EV = [
+  { t: 0,     chip: 0, fn: () => { resetAll(); stage.classList.add('pairing'); } },
+  { t: 4200,           fn: () => { stage.classList.remove('pairing'); stage.classList.add('boundflash'); } },
+  { t: 5700,           fn: () => stage.classList.remove('boundflash') },
+  { t: 6200,  chip: 1, fn: () => stage.classList.add('idle') },
+  { t: 9000,  chip: 2, fn: () => { stage.classList.remove('idle'); pols[0].classList.add('arrived'); } },
+  { t: 10050,          fn: () => { pols[0].classList.remove('arrived'); pols[0].classList.add('settled'); } },
+  { t: 10500,          fn: () => pols[0].classList.add('stickered') },
+  { t: 13000, chip: 2, fn: () => pols[0].classList.add('fullscreen') },
+  { t: 14600,          fn: () => pols[0].classList.add('zeroui') },
+  { t: 17000, chip: 3, fn: () => stage.classList.add('starred') },
+  { t: 19100,          fn: () => stage.classList.add('starfade') },
+  { t: 20200,          fn: () => { stage.classList.remove('starred'); stage.classList.remove('starfade'); } },
+  { t: 22400, chip: 4, fn: () => pols[1].classList.add('arrived') },
+  { t: 23450,          fn: () => { pols[1].classList.remove('arrived'); pols[1].classList.add('settled'); } },
+  { t: 23900,          fn: () => pols[1].classList.add('stickered') },
+  { t: 26400,          fn: () => pols[1].classList.add('fullscreen') },
+  { t: 28000,          fn: () => pols[1].classList.add('zeroui') },
+  { t: 30000, chip: 5, fn: () => stage.classList.add('night') },
+];
+const TOTAL = 34800;
+
+function setChip(i) { chips.forEach((c, k) => c.classList.toggle('active', k === i)); }
+
+function runFrom(t0) {
+  timers.forEach(clearTimeout); timers = [];
+  /* 追帧：t0 之前的状态瞬时铺好，之后的按时刻播放 */
+  stage.classList.add('noanim');
+  resetAll();
+  EV.filter(e => e.t < t0).forEach(e => { e.fn(); if (e.chip !== undefined) setChip(e.chip); });
+  void stage.offsetWidth;
+  stage.classList.remove('noanim');
+  EV.filter(e => e.t >= t0).forEach(e =>
+    timers.push(setTimeout(() => { e.fn(); if (e.chip !== undefined) setChip(e.chip); }, e.t - t0)));
+  if (!reduced)
+    timers.push(setTimeout(() => runFrom(0), TOTAL - t0));
+}
+chips.forEach(c => c.addEventListener('click', () => runFrom(+c.dataset.t)));
+$('#nightBtn').addEventListener('click', e => {
+  stage.classList.toggle('night');
+  e.currentTarget.classList.toggle('on', stage.classList.contains('night'));
+});
+
+/* 800×480 画布自适应缩放（zoom 保持布局高度正确） */
+function fit() {
+  const w = Math.min(document.querySelector('main').clientWidth, 832);
+  box.style.zoom = w / 832;
+}
+addEventListener('resize', fit); fit();
+
+/* reduced-motion：静态呈现定格帧，不循环。
+   URL hash 控制：#t=17000 从该节拍开始。
+   ,freeze：瞬时动画慢放定格（录屏用，截图帧可见涟漪/粒子/对勾）。
+   ,hardfreeze：所有动画与过渡完全暂停在该帧（截图/设计审查用，确定性）。 */
+const hm = location.hash.match(/t=(\d+)/);
+const freeze = /freeze/.test(location.hash);
+const hard = /hardfreeze/.test(location.hash);
+const start = hm ? +hm[1] : (reduced ? 13000 : 0);
+if (freeze || (reduced && !hm)) {
+  stage.classList.add('noanim');   /* 先抑制动画/过渡，避免类应用瞬间产生中间态 */
+  stage.classList.add(hard ? 'hardfreeze' : 'slowmo');
+  resetAll();
+  EV.filter(e => e.t <= start).forEach(e => { e.fn(); if (e.chip !== undefined) setChip(e.chip); });
+  void stage.offsetWidth;           /* 一次性 reflow：所有终态类同时生效 */
+  if (!hard) stage.classList.remove('noanim');  /* slowmo 解除抑制走慢放；hard 永久抑制 */
+  /* hard 模式下 .noanim 绝对不许移除（第 4 轮验证实测）：移除瞬间过渡从
+     动画值/起始值起跑，headless 捕获的是起跑帧——配对帧数字消失、绑定帧
+     对勾空白、待机帧面板不褪、全屏帧贴纸重出全由此而来。元素终态由下方
+     hardfreeze 规则在"动画/过渡全程抑制"的前提下显式钉住。 */
+} else {
+  runFrom(start);
+}
+})();
+</script>
+</body>
+</html>

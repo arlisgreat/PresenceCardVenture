@@ -4,9 +4,9 @@
 #include <LovyanGFX.hpp>
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
+#include <lgfx/v1/touch/Touch_GT911.hpp>
 
-// ESP32-8048S043C direct-RGB wiring. Touch is intentionally not configured in
-// this first display-only build.
+// ESP32-8048S043C direct-RGB wiring with GT911 capacitive touch.
 class PresenceDisplay : public lgfx::LGFX_Device {
  public:
   PresenceDisplay() {
@@ -76,6 +76,30 @@ class PresenceDisplay : public lgfx::LGFX_Device {
       backlight_.config(cfg);
     }
     panel_.light(&backlight_);
+
+    // GT911 capacitive touch: SDA=19, SCL=20, RST=38. INT (GPIO18) is NC on
+    // this board revision (needs the R17 0-ohm bridge), so pin_int stays -1
+    // and the driver polls over I2C. GT911 picks 0x5D or 0x14 at boot
+    // depending on the floating INT line; Touch_GT911::init() retries both.
+    {
+      auto cfg = touch_.config();
+      cfg.x_min = 0;
+      cfg.x_max = 799;
+      cfg.y_min = 0;
+      cfg.y_max = 479;
+      cfg.pin_int = -1;
+      cfg.pin_rst = GPIO_NUM_38;
+      cfg.bus_shared = false;
+      cfg.offset_rotation = 0;
+      cfg.i2c_port = 1;
+      cfg.i2c_addr = 0x5D;
+      cfg.pin_sda = GPIO_NUM_19;
+      cfg.pin_scl = GPIO_NUM_20;
+      cfg.freq = 400000;  // GT911 reliable max; the ITouch 1MHz default is too fast
+      touch_.config(cfg);
+      panel_.setTouch(&touch_);
+    }
+
     setPanel(&panel_);
   }
 
@@ -83,4 +107,5 @@ class PresenceDisplay : public lgfx::LGFX_Device {
   lgfx::Bus_RGB bus_;
   lgfx::Panel_RGB panel_;
   lgfx::Light_PWM backlight_;
+  lgfx::Touch_GT911 touch_;
 };
