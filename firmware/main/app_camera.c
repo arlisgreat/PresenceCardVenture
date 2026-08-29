@@ -68,10 +68,10 @@ esp_err_t app_camera_init(void)
             /* 画质默认值微调: 亮度 +1, 对照度 +1 (GC0308 默认偏暗) */
             s->set_brightness(s, 1);
             s->set_contrast(s, 1);
-            /* 装配方向: 屏已转 180 度, 传感器同步转 (vflip+hmirror,
-             * 寄存器级, 预览与拍照存片同源同向, 零 CPU) */
-            s->set_vflip(s, 1);
-            s->set_hmirror(s, 1);
+            /* 装配方向 180 度: GC0308 CISCTL(0x14) 翻转位真机写不进
+             * (I2C ACK 但读回不变, set_vflip 与裸写均无效) —— 改软件补偿:
+             * 预览 hw2d_yuv_filter_rgb565_rot180 反向写出 (零额外遍历),
+             * 拍照 worker 入口 hw2d_yuv_rot180 原地反转 (~2ms) */
             ESP_LOGI(TAG, "GC0308 ready: QVGA YUV422 (frame %u)", s->status.framesize);
         }
     } else {

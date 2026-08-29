@@ -263,11 +263,15 @@ static void preview_timer_cb(lv_timer_t *t)
         /* QVGA YUV422 直通: YUV 域滤镜 + RGB565 转换融合单遍 (显示边界) */
         const uint8_t *yuyv = (const uint8_t *)f->buf;
         hw2d_yuv_build_luts(&s_active_filter, &s_yuv_luts);
-        hw2d_yuv_filter_rgb565_stat(s_canvas_buf, yuyv, UI_W * UI_H, &s_yuv_luts);
+        /* rot180: 装配方向补偿 (GC0308 寄存器翻转真机写不进, 软件反向写出) */
+        hw2d_yuv_filter_rgb565_rot180_stat(s_canvas_buf, yuyv, UI_W * UI_H,
+                                           &s_yuv_luts);
         if (thumb_due) {
             if (s_sticker >= 0 && s_face_rgb) {
-                /* 人脸检测吃 RGB565: 恒等表转换一帧 (每 ~320ms) */
-                hw2d_yuv_filter_rgb565(s_face_rgb, yuyv, UI_W * UI_H, &s_id_luts);
+                /* 人脸检测吃 RGB565: 恒等表转换一帧 (每 ~320ms);
+                 * 同样 rot180, 人脸框坐标与旋转后的画面/照片一致 */
+                hw2d_yuv_filter_rgb565_rot180(s_face_rgb, yuyv, UI_W * UI_H,
+                                              &s_id_luts);
                 pvc_face_submit(s_face_rgb);
             }
             s_thumb_dirty = false;
@@ -327,8 +331,8 @@ static void update_thumbs(const uint8_t *src)
     for (int i = 0; i < HW2D_FILTER_MAX; i++) {
         hw2d_yuv_build_luts(hw2d_filter_get((hw2d_filter_id_t)i),
                             &s_thumb_luts[i]);
-        hw2d_yuv_filter_rgb565(s_thumb_bufs[i], t, THUMB_SZ * THUMB_SZ,
-                               &s_thumb_luts[i]);
+        hw2d_yuv_filter_rgb565_rot180(s_thumb_bufs[i], t, THUMB_SZ * THUMB_SZ,
+                                      &s_thumb_luts[i]);
         if (s_thumb_canvases[i]) lv_obj_invalidate(s_thumb_canvases[i]);
     }
 }
@@ -483,6 +487,8 @@ static void photo_worker(void *arg)
          * -> 贴纸合成 (亮度提亮圆, 位置取快门时刻人脸框) */
         uint8_t *yuyv = (uint8_t *)job.snap;
         static hw2d_yuv_luts_t s_wk_luts;      /* worker 单任务专用 */
+        /* 装配方向补偿: 先转 180 度, 后续人脸框/贴纸坐标即与预览一致 */
+        hw2d_yuv_rot180(yuyv, pw * ph);
         hw2d_yuv_blur_y(yuyv, yuyv, pw, ph, (uint8_t)job.smooth);
         int64_t t_blur = esp_timer_get_time();
         if (job.fid >= FILTER_CCD_BASE) {

@@ -209,6 +209,34 @@ int main(void)
         CHECK(!pvc_jpeg_dims(sof, 9, &jw, &jh), "truncated should fail");
     }
 
+    /* ---- 180 度旋转 (装配方向补偿): 两次=恒等; 融合算子=正序输出倒置 ---- */
+    {
+        enum { RN = 96 };                     /* 像素数 (48 宏像素) */
+        static uint8_t ry[RN * 2], rb[RN * 2];
+        static uint16_t straight[RN], rot[RN];
+        srand(4242);
+        for (size_t i = 0; i < sizeof(ry); i++) ry[i] = (uint8_t)rand();
+        memcpy(rb, ry, sizeof(ry));
+        hw2d_yuv_rot180(rb, RN);
+        /* 单次: 首宏像素 = 尾宏像素 Y 互换 (色度随对) */
+        CHECK(rb[0] == ry[(RN - 2) * 2 + 2] && rb[2] == ry[(RN - 2) * 2] &&
+              rb[1] == ry[(RN - 2) * 2 + 1] && rb[3] == ry[(RN - 2) * 2 + 3],
+              "rot180 macro-pixel mapping");
+        hw2d_yuv_rot180(rb, RN);
+        CHECK(memcmp(rb, ry, sizeof(ry)) == 0, "rot180 twice != identity");
+
+        hw2d_yuv_luts_t rl;
+        memset(&rl, 0, sizeof(rl));
+        hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_WARM), &rl);
+        hw2d_yuv_filter_rgb565(straight, ry, RN, &rl);
+        hw2d_yuv_filter_rgb565_rot180(rot, ry, RN, &rl);
+        int rot_ok = 1;
+        for (int i = 0; i < RN; i++) {
+            if (rot[i] != straight[RN - 1 - i]) { rot_ok = 0; break; }
+        }
+        CHECK(rot_ok, "fused rot180 != reversed straight output");
+    }
+
     /* ---- OTA 纯逻辑: 语义版本比较 + MD5 hex 解析 (含模糊) ---- */
     {
         static const struct { const char *a, *b; int want; } vc[] = {

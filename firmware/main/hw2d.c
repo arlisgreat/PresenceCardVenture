@@ -466,6 +466,44 @@ void hw2d_yuv_filter_rgb565(uint16_t *dst, const uint8_t *src, uint32_t npix,
     }
 }
 
+/*
+ * 反向写出变体: 输出即 180 度旋转 (装配方向补偿)。
+ * GC0308 真机 CISCTL 翻转位写不进 (ACK 但读回不变), 软件补偿:
+ * 预览用本算子零额外遍历; 拍照用 hw2d_yuv_rot180 原地反转。
+ */
+void hw2d_yuv_filter_rgb565_rot180(uint16_t *dst, const uint8_t *src,
+                                   uint32_t npix, const hw2d_yuv_luts_t *luts)
+{
+    uint32_t np = npix & ~1u;
+    uint16_t *d = dst + np;
+    for (uint32_t i = 0; i < np; i += 2) {
+        const uint8_t *p = src + i * 2;
+        int y0 = luts->y[p[0]];
+        int cb = luts->cb[p[1]];
+        int y1 = luts->y[p[2]];
+        int cr = luts->cr[p[3]];
+        d -= 2;                              /* (x,y)->(W-1-x,H-1-y): 像素序整体倒置 */
+        d[1] = yuv2rgb565(y0, cb, cr);
+        d[0] = yuv2rgb565(y1, cb, cr);
+    }
+}
+
+/* YUYV422 原地 180 度旋转: 宏像素序倒置 + 对内 Y0/Y1 互换 (色度随对) */
+void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix)
+{
+    uint32_t nmp = npix / 2;
+    uint8_t *a = yuyv, *b = yuyv + (size_t)(nmp - 1) * 4;
+    for (uint32_t i = 0; i < nmp / 2; i++, a += 4, b -= 4) {
+        uint8_t t0 = a[0], t1 = a[1], t2 = a[2], t3 = a[3];
+        a[0] = b[2]; a[1] = b[1]; a[2] = b[0]; a[3] = b[3];
+        b[0] = t2; b[1] = t1; b[2] = t0; b[3] = t3;
+    }
+    if (nmp & 1) {                           /* 中心宏像素: 只换 Y */
+        uint8_t *m = yuyv + (size_t)(nmp / 2) * 4;
+        uint8_t t = m[0]; m[0] = m[2]; m[2] = t;
+    }
+}
+
 void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,
                      uint8_t strength)
 {
@@ -903,6 +941,15 @@ void hw2d_yuv_filter_rgb565_stat(uint16_t *dst, const uint8_t *src,
 {
     uint32_t t0 = HW2D_TIME_US();
     hw2d_yuv_filter_rgb565(dst, src, npix, luts);
+    s_stats.n_yuv++;
+    s_stats.us_yuv += HW2D_TIME_US() - t0;
+}
+
+void hw2d_yuv_filter_rgb565_rot180_stat(uint16_t *dst, const uint8_t *src,
+                                        uint32_t npix, const hw2d_yuv_luts_t *luts)
+{
+    uint32_t t0 = HW2D_TIME_US();
+    hw2d_yuv_filter_rgb565_rot180(dst, src, npix, luts);
     s_stats.n_yuv++;
     s_stats.us_yuv += HW2D_TIME_US() - t0;
 }
