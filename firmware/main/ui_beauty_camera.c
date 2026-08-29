@@ -258,21 +258,18 @@ static void preview_timer_cb(lv_timer_t *t)
     if (f->width == UI_W && f->height == UI_H) {
         /* QVGA YUV422 直通: YUV 域滤镜 + RGB565 转换融合单遍 (显示边界) */
         const uint8_t *yuyv = (const uint8_t *)f->buf;
-        /* 色度降噪 (原地改相机帧, 下次采集整帧重写): 低光绿噪点主因是
-         * 传感器色度噪声, Y 磨皮不覆盖 */
-        hw2d_yuv_chroma_smooth((uint8_t *)yuyv, UI_W, UI_H);
         hw2d_yuv_build_luts(&s_active_filter, &s_yuv_luts);
-        /* rot180: 装配方向补偿 (GC0308 寄存器翻转真机写不进, 软件反向写出) */
-        hw2d_yuv_filter_rgb565_rot180_stat(s_canvas_buf, yuyv, UI_W * UI_H,
-                                           &s_yuv_luts);
-        if (s_mirror) hw2d_rgb565_hmirror(s_canvas_buf, UI_W, UI_H);
+        /* 终极融合单遍: 装配 180 度 + 镜像 + 色度降噪 + 滤镜 + RGB565
+         * (真机: rot180+hmirror+smooth 三遍叠加曾达 60ms/帧; 镜像时
+         * rot180∘hmirror = 纯垂直翻转, 全顺序访存, 不再改写相机帧) */
+        hw2d_yuv_render_rgb565_stat(s_canvas_buf, yuyv, UI_W, UI_H,
+                                    &s_yuv_luts, s_mirror);
         if (thumb_due) {
             if (s_sticker >= 0 && s_face_rgb) {
-                /* 人脸检测吃 RGB565: 恒等表转换一帧 (每 ~320ms);
-                 * 同样 rot180, 人脸框坐标与旋转后的画面/照片一致 */
-                hw2d_yuv_filter_rgb565_rot180(s_face_rgb, yuyv, UI_W * UI_H,
-                                              &s_id_luts);
-                if (s_mirror) hw2d_rgb565_hmirror(s_face_rgb, UI_W, UI_H);
+                /* 人脸检测吃 RGB565: 恒等表 + 同几何变换 (每 ~320ms),
+                 * 人脸框坐标与画面/照片一致 */
+                hw2d_yuv_render_rgb565(s_face_rgb, yuyv, UI_W, UI_H,
+                                       &s_id_luts, s_mirror);
                 pvc_face_submit(s_face_rgb);
             }
             s_thumb_dirty = false;

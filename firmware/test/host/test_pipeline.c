@@ -284,6 +284,31 @@ int main(void)
         CHECK(cs[8 * 4] == 100 && cs[8 * 4 + 2] == 105, "smooth touched Y");
     }
 
+    /* ---- 预览融合算子: 单遍 ≡ 平滑->rot180(->镜像) 参考组合 ---- */
+    {
+        enum { FW2 = 16, FH2 = 6 };
+        static uint8_t fsrc[FW2 * FH2 * 2], ftmp[FW2 * FH2 * 2];
+        static uint16_t fused[FW2 * FH2], ref[FW2 * FH2];
+        srand(9090);
+        for (size_t i = 0; i < sizeof(fsrc); i++) fsrc[i] = (uint8_t)rand();
+        hw2d_yuv_luts_t fl;
+        memset(&fl, 0, sizeof(fl));
+        hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_WARM), &fl);
+
+        for (int mir = 0; mir <= 1; mir++) {
+            memcpy(ftmp, fsrc, sizeof(fsrc));
+            hw2d_yuv_chroma_smooth(ftmp, FW2, FH2);
+            hw2d_yuv_filter_rgb565_rot180(ref, ftmp, FW2 * FH2, &fl);
+            if (mir) hw2d_rgb565_hmirror(ref, FW2, FH2);
+            hw2d_yuv_render_rgb565(fused, fsrc, FW2, FH2, &fl, mir != 0);
+            int eq = 1;
+            for (int i = 0; i < FW2 * FH2; i++) {
+                if (fused[i] != ref[i]) { eq = 0; break; }
+            }
+            CHECK(eq, "fused render (mirror=%d) != reference chain", mir);
+        }
+    }
+
     /* ---- OTA 纯逻辑: 语义版本比较 + MD5 hex 解析 (含模糊) ---- */
     {
         static const struct { const char *a, *b; int want; } vc[] = {

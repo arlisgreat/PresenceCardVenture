@@ -187,6 +187,21 @@ void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix);
 /* 色度降噪: Cb/Cr 各 1-2-1 水平平滑 (传感器低光彩点/绿噪点; Y 不动) */
 void hw2d_yuv_chroma_smooth(uint8_t *yuyv, uint32_t w, uint32_t h);
 
+/*
+ * 预览终极融合: 装配 180 度 + (可选)自拍镜像 + 色度降噪 + 滤镜 + RGB565,
+ * 单遍。mirror=1 时 rot180∘hmirror = 纯垂直翻转 (行倒序行内正序, 全顺序
+ * 访存); mirror=0 纯 rot180。不修改源帧 (色度平滑在扫描中完成)。
+ * 内部行缓冲 (PSRAM 仅两次整行突发); 仅限单任务 (预览/LVGL) 调用;
+ * 行宽上限 HW2D_RENDER_MAX_W。
+ */
+#define HW2D_RENDER_MAX_W 320
+void hw2d_yuv_render_rgb565(uint16_t *dst, const uint8_t *src,
+                            uint32_t w, uint32_t h,
+                            const hw2d_yuv_luts_t *luts, bool mirror);
+void hw2d_yuv_render_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t w, uint32_t h,
+                                 const hw2d_yuv_luts_t *luts, bool mirror);
+
 /* 自拍镜像: RGB565 预览与 YUYV422 成片均按行水平翻转; 调用两次恢复原图。 */
 void hw2d_rgb565_hmirror(uint16_t *rgb, uint32_t w, uint32_t h);
 void hw2d_yuv_hmirror(uint8_t *yuyv, uint32_t w, uint32_t h);
