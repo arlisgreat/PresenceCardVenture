@@ -40,13 +40,28 @@ jobs:
           fi
           pio run -e cores3
         working-directory: firmware
-      # 硬件交付烧录说明与真机验收记录。
+      - name: Create audited flash manifest
+        run: |
+          printf '%s\n' \
+            '--flash_mode dio --flash_freq 80m --flash_size 16MB' \
+            '0x0 bootloader.bin' \
+            '0x8000 partitions.bin' \
+            '0x20000 firmware.bin' \
+            > .pio/build/cores3/pvc_flash_args
+        working-directory: firmware
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware-bin
+          name: firmware-flash
           path: |
-            firmware/.pio/build/cores3/*.bin
-            firmware/.pio/build/cores3/flash_args
+            firmware/.pio/build/cores3/bootloader.bin
+            firmware/.pio/build/cores3/partitions.bin
+            firmware/.pio/build/cores3/firmware.bin
+            firmware/.pio/build/cores3/pvc_flash_args
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-debug
+          path: |
             firmware/.pio/build/cores3/firmware.elf
           retention-days: 30
 
