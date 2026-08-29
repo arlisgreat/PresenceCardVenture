@@ -132,6 +132,15 @@ static int s_smooth = 12;
 static int s_sticker = -1;                 /* -1 = 无贴纸 */
 static bool s_mirror = true;               /* 自拍默认镜像; 可在工具栏切换 */
 
+/* 三模式 (交付文档 v1.1 §1): 状态机实现见 feed 区之前 */
+typedef enum { MODE_HOME = 0, MODE_CIRCLE, MODE_BIG, MODE_CAMERA } ui_mode_t;
+static ui_mode_t s_mode = MODE_HOME;           /* 默认常驻屏, 相机下滑进入 */
+static ui_mode_t s_mode_before_cam = MODE_HOME;
+static void set_mode(ui_mode_t m);
+static bool     s_sleeping = false;        /* 息屏模式 (§7) */
+static int      s_sleep_missed = 0;        /* 息屏期间错过的新照片数 */
+static void sleep_wake(void);
+
 /* 当前生效滤镜参数 (基础滤镜 + 美白叠加); hw2d 按参数内容判断 LUT 重建 */
 static hw2d_filter_t s_active_filter;
 static hw2d_yuv_luts_t s_yuv_luts;               /* 预览 YUV 表 (core0 专用) */
@@ -285,6 +294,7 @@ static void preview_timer_cb(lv_timer_t *t)
     (void)t;
     const app_camera_frame_t *f;
     if (!s_canvas || s_publish_pending) return;
+    if (s_mode != MODE_CAMERA) return;   /* 相机为下滑进入的子状态, 其余模式不渲染预览 */
     f = app_camera_grab();
     if (!f) return;
 
@@ -650,6 +660,7 @@ static void take_photo(void)
 {
     const app_camera_frame_t *f;
 
+    if (s_sleeping) { sleep_wake(); return; }
     if (!s_canvas_buf || !s_photo_q) {
         toast_show("无画面");
         return;
@@ -757,6 +768,7 @@ static void publish_close_now(void)
     s_transfer_veil = NULL;
     s_transfer_dot = NULL;
     s_transfer_arc = NULL;
+    /* 模式归属由调用处决定: 重拍/取消 -> 取景框; 发布成功 -> 拍照前模式 */
 }
 
 static void publish_finish(bool send)
@@ -767,6 +779,7 @@ static void publish_finish(bool send)
 
     if (!send) {
         publish_close_now();
+        set_mode(MODE_CAMERA);     /* 重拍/取消: 回取景框 (规范 §5) */
         return;
     }
 
@@ -829,6 +842,8 @@ static void publish_timer_cb(lv_timer_t *t)
         int close_ms = (int)((now - s_transfer_close_us) / 1000);
         if (close_ms >= 460) {
             publish_close_now();
+            /* 发布成功 -> 回拍照前模式; 失败/超时 -> 回取景框重试 */
+            set_mode(sent ? s_mode_before_cam : MODE_CAMERA);
             return;
         }
         if (s_panel) {
@@ -1325,7 +1340,13 @@ static void spawn_like_float(int count)
     }
 }
 
-/* ================= 好友 feed 浏览 (规范 §3) ================= */
+/* ================= 三模式状态机 (交付文档 v1.1 §1-§3) =================
+ * MODE_HOME   常驻主图/足迹 (默认, 离线完整可用)
+ * MODE_CIRCLE 小圈流 (朋友照片)
+ * MODE_BIG    大圈 (订阅精选; 无订阅时空态)
+ * MODE_CAMERA 拍照 (下滑进入; 取景器是全屏子状态, 不是默认屏)
+ */
+/* feed 层对象前置 (状态机引用; 函数见下方 feed 区) */
 static lv_obj_t *s_feed_panel = NULL;
 static lv_obj_t *s_feed_canvas = NULL;
 static uint16_t *s_feed_buf = NULL;           /* 320x240 RGB565 (PSRAM) */
@@ -1336,6 +1357,404 @@ static int s_feed_n = 0, s_feed_idx = 0;
 static bool s_feed_circle_only = false;   /* true = 只看小圈内容 */
 static bool s_feed_auto = false;          /* 到达仪式自动展示中 (交互即取消) */
 static lv_timer_t *s_arrival_timer = NULL;
+static int  feed_snapshot_filtered(void);
+static void on_feed_next(lv_event_t *e);
+static void on_feed_prev(lv_event_t *e);
+static void arrival_hide_cb(lv_timer_t *t);
+static bool     s_feed_big = false;        /* feed 层当前按大圈筛选 */
+static lv_obj_t *s_bar = NULL;             /* 相机底部控制条 (CAMERA 可见) */
+static lv_obj_t *s_feed_hot = NULL;        /* 相机顶部小圈快捷 (CAMERA 可见) */
+static lv_obj_t *s_home_canvas = NULL;     /* 常驻主图/足迹画布 */
+static uint16_t *s_home_buf = NULL;
+static lv_obj_t *s_home_hint = NULL;       /* 空态提示 */
+#define FOOT_MAX 12
+static char  s_foot_paths[FOOT_MAX][64];
+static int   s_foot_n = 0, s_foot_idx = 0;
+static lv_obj_t *s_picker = NULL;          /* 三模式选择盘 */
+static lv_obj_t *s_picker_card[3];
+static lv_timer_t *s_picker_idle = NULL;
+static lv_obj_t *s_sheet = NULL;           /* 轻系统页 */
+static lv_obj_t *s_mode_tag = NULL;        /* 模式名贴纸 */
+static lv_timer_t *s_mode_tag_timer = NULL;
+
+static void set_mode(ui_mode_t m);
+static void show_filter_tag(void);
+static void ui_sheet_open(void);
+
+/* ---- 足迹扫描: SD DCIM 最新 FOOT_MAX 张 (离线数据源) ---- */
+static void scan_footprints(void)
+{
+    s_foot_n = 0;
+    DIR *d = opendir("/sdcard/DCIM");
+    if (!d) return;
+    /* 文件名为时间序 (boot 计数前缀), 直接收集后按名字倒序 */
+    struct dirent *e;
+    while ((e = readdir(d)) && s_foot_n < FOOT_MAX) {
+        const char *nm = e->d_name;
+        size_t ln = strlen(nm);
+        if (ln < 5 || strcmp(nm + ln - 4, ".jpg") != 0) continue;
+        /* 简单插入保持名字降序 (名字即时间序) */
+        /* 文件名长度截断到 50 (d_name 理论 255, 路径缓冲 64) */
+        char safe[51];
+        strncpy(safe, nm, sizeof(safe) - 1);
+        safe[sizeof(safe) - 1] = '\0';
+        int i = s_foot_n++;
+        snprintf(s_foot_paths[i], 64, "/sdcard/DCIM/%s", safe);
+        while (i > 0 && strcmp(s_foot_paths[i - 1], s_foot_paths[i]) < 0) {
+            char tmp[64];
+            memcpy(tmp, s_foot_paths[i - 1], 64);
+            memcpy(s_foot_paths[i - 1], s_foot_paths[i], 64);
+            memcpy(s_foot_paths[i], tmp, 64);
+            i--;
+        }
+    }
+    closedir(d);
+}
+
+static void home_show(int idx)
+{
+    if (!s_home_buf || !s_home_canvas) return;
+    if (s_foot_n == 0) {
+        if (s_home_hint) lv_obj_clear_flag(s_home_hint, LV_OBJ_FLAG_HIDDEN);
+        hw2d_fill(s_home_buf, UI_W * UI_H, rgb565(0x1a, 0x1d, 0x1a));
+        lv_obj_invalidate(s_home_canvas);
+        return;
+    }
+    if (s_home_hint) lv_obj_add_flag(s_home_hint, LV_OBJ_FLAG_HIDDEN);
+    if (idx < 0) idx = 0;
+    if (idx >= s_foot_n) idx = s_foot_n - 1;
+    s_foot_idx = idx;
+    uint32_t w = 0, h = 0;
+    if (load_jpg_565(s_foot_paths[idx], s_home_buf, UI_W, UI_H, &w, &h) != 0 ||
+        w != UI_W || h != UI_H) {
+        hw2d_fill(s_home_buf, UI_W * UI_H, rgb565(0x1a, 0x1d, 0x1a));
+    }
+    lv_obj_invalidate(s_home_canvas);
+}
+
+/* ---- 模式名贴纸 (切模式时顶部浮现 1.5s, 规范 §3) ---- */
+static void mode_tag_hide_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);
+    s_mode_tag_timer = NULL;
+    if (s_mode_tag) lv_obj_add_flag(s_mode_tag, LV_OBJ_FLAG_HIDDEN);
+}
+static void show_mode_tag(const char *txt)
+{
+    if (!s_mode_tag) return;
+    lv_label_set_text(s_mode_tag, txt);
+    lv_obj_clear_flag(s_mode_tag, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_mode_tag);
+    if (s_mode_tag_timer) lv_timer_del(s_mode_tag_timer);
+    s_mode_tag_timer = lv_timer_create(mode_tag_hide_cb, 1500, NULL);
+}
+
+/* ---- 模式切换 ---- */
+static void set_mode(ui_mode_t m)
+{
+    if (m != MODE_CAMERA) s_mode_before_cam = m;
+    s_mode = m;
+    bool cam = (m == MODE_CAMERA);
+    if (s_canvas)   lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
+    if (!cam && s_canvas) { /* 非相机时预览停渲染 (preview_timer_cb 守卫) */ }
+    if (cam && s_canvas)    lv_obj_clear_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
+    if (s_bar)      cam ? lv_obj_clear_flag(s_bar, LV_OBJ_FLAG_HIDDEN)
+                        : lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    if (s_feed_hot) cam ? lv_obj_clear_flag(s_feed_hot, LV_OBJ_FLAG_HIDDEN)
+                        : lv_obj_add_flag(s_feed_hot, LV_OBJ_FLAG_HIDDEN);
+    if (s_status_r) cam ? lv_obj_clear_flag(s_status_r, LV_OBJ_FLAG_HIDDEN)
+                        : lv_obj_add_flag(s_status_r, LV_OBJ_FLAG_HIDDEN);
+    if (!cam && s_filter_tag) lv_obj_add_flag(s_filter_tag, LV_OBJ_FLAG_HIDDEN);
+    if (s_home_canvas) {
+        if (m == MODE_HOME) lv_obj_clear_flag(s_home_canvas, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(s_home_canvas, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (m == MODE_HOME) {
+        scan_footprints();
+        home_show(s_foot_idx);
+    }
+    if (m == MODE_CIRCLE || m == MODE_BIG) {
+        s_feed_big = (m == MODE_BIG);
+        s_feed_circle_only = false;
+        open_feed();
+        if (s_feed_n == 0) {
+            /* 空态回退常驻 (小圈无照片 / 大圈未订阅) */
+            if (m == MODE_BIG) toast_show("大圈在 App 端订阅");
+            s_feed_big = false;
+            s_mode = m = MODE_HOME;
+            if (s_home_canvas) lv_obj_clear_flag(s_home_canvas, LV_OBJ_FLAG_HIDDEN);
+            scan_footprints();
+            home_show(s_foot_idx);
+        }
+    } else if (s_feed_panel && !lv_obj_has_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN)
+               && !s_feed_auto) {
+        lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    static const char *const names[] = { "常驻", "小圈", "大圈", "拍照" };
+    show_mode_tag(names[m]);
+    PVC_EV("mode m=%d", (int)m);
+}
+
+/* ---- 取景框左右轻划切滤镜 (规范 §5) ---- */
+static void filter_step(int d)
+{
+    s_filter = (s_filter + FILTER_EXT_COUNT + d) % FILTER_EXT_COUNT;
+    update_active_filter();
+    s_thumb_dirty = true;
+    update_status();
+    show_filter_tag();
+}
+
+/* ---- 息屏 / 唤醒 (规范 §7) ---- */
+static void sleep_enter(void)
+{
+    if (s_sleeping) return;
+    s_sleeping = true;
+    s_sleep_missed = 0;
+    bsp_display_backlight_off();   /* 800ms 渐暗待 BSP 亮度级支持后补 */
+    PVC_EV("sleep enter");
+}
+static void sleep_wake(void)
+{
+    if (!s_sleeping) return;
+    s_sleeping = false;
+    bsp_display_backlight_on();
+    lv_display_trigger_activity(NULL);
+    PVC_EV("sleep wake missed=%d", s_sleep_missed);
+    /* 错过的照片: 最新一张先闪现 20s */
+    if (s_sleep_missed > 0) {
+        s_sleep_missed = 0;
+        s_feed_big = false;
+        s_feed_circle_only = false;
+        s_feed_n = feed_snapshot_filtered();
+        if (s_feed_n > 0 && s_feed_panel && s_feed_buf) {
+            s_feed_idx = 0;
+            s_feed_auto = true;
+            lv_obj_set_style_opa(s_feed_panel, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_feed_panel);
+            render_feed();
+            if (s_arrival_timer) lv_timer_del(s_arrival_timer);
+            s_arrival_timer = lv_timer_create(arrival_hide_cb, 20000, NULL);
+        }
+    }
+}
+
+/* ---- 全局手势路由 (规范 §2: 各模式根层注册, 回调统一进这里) ---- */
+static void gesture_dispatch(lv_dir_t dir)
+{
+    if (s_sleeping) { sleep_wake(); return; }
+    if (s_picker) return;                       /* 选择盘打开期间不导航 */
+    if (s_sheet && !lv_obj_has_flag(s_sheet, LV_OBJ_FLAG_HIDDEN)) {
+        /* 系统页打开中: 下滑收起 */
+        if (dir == LV_DIR_BOTTOM) lv_obj_add_flag(s_sheet, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (s_publish_pending) {                    /* 定格预览: 上滑=重拍 */
+        if (dir == LV_DIR_TOP) publish_finish(false);
+        return;
+    }
+    switch (s_mode) {
+    case MODE_CAMERA:
+        if (dir == LV_DIR_LEFT)       filter_step(+1);
+        else if (dir == LV_DIR_RIGHT) filter_step(-1);
+        else if (dir == LV_DIR_TOP)   set_mode(s_mode_before_cam);
+        break;
+    case MODE_HOME:
+        if (dir == LV_DIR_BOTTOM)     set_mode(MODE_CAMERA);
+        else if (dir == LV_DIR_TOP)   ui_sheet_open();
+        else if (dir == LV_DIR_LEFT)  home_show(s_foot_idx + 1);
+        else if (dir == LV_DIR_RIGHT) home_show(s_foot_idx - 1);
+        break;
+    case MODE_CIRCLE:
+    case MODE_BIG:
+        if (dir == LV_DIR_BOTTOM)     set_mode(MODE_CAMERA);
+        else if (dir == LV_DIR_TOP)   ui_sheet_open();
+        else if (dir == LV_DIR_LEFT)  on_feed_next(NULL);
+        else if (dir == LV_DIR_RIGHT) {
+            if (s_feed_idx == 0) set_mode(MODE_HOME);
+            else on_feed_prev(NULL);
+        }
+        break;
+    }
+}
+
+static void on_layer_gesture(lv_event_t *e)
+{
+    gesture_dispatch(lv_indev_get_gesture_dir(lv_indev_active()));
+}
+
+/* 常驻屏单击: 息屏唤醒; 否则按压处散星 (纯视觉, 本地足迹无 photo_id 不发 like) */
+static void on_home_click(lv_event_t *e)
+{
+    (void)e;
+    if (s_sleeping) { sleep_wake(); return; }
+    lv_indev_t *indev = lv_indev_active();
+    if (indev) {
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        spawn_star_at(p.x, p.y);
+    }
+}
+
+/* ---- 三模式选择盘 (规范 §3: 长按 1.5s 呼出) ---- */
+static void picker_close(void)
+{
+    if (s_picker_idle) { lv_timer_del(s_picker_idle); s_picker_idle = NULL; }
+    if (s_picker) { lv_obj_del(s_picker); s_picker = NULL; }
+}
+static void picker_idle_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);
+    s_picker_idle = NULL;
+    picker_close();      /* 3s 无操作自动取消 */
+}
+static void picker_pick_cb(lv_event_t *e)
+{
+    int m = (int)(intptr_t)lv_event_get_user_data(e);
+    picker_close();
+    set_mode((ui_mode_t)m);   /* 选择盘淡出并入 200ms 由 LVGL 默认删除动画省略 */
+}
+static void picker_mask_cb(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == lv_event_get_current_target(e)) picker_close();
+}
+static void picker_open(void)
+{
+    if (s_picker || s_sleeping || s_publish_pending) return;
+    if (s_sheet) { lv_obj_add_flag(s_sheet, LV_OBJ_FLAG_HIDDEN); }
+    s_picker = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(s_picker, UI_W, UI_H);
+    lv_obj_set_pos(s_picker, 0, 0);
+    lv_obj_set_style_bg_color(s_picker, COL_NIGHT, 0);
+    lv_obj_set_style_bg_opa(s_picker, LV_OPA_40, 0);   /* 背景压暗 40% */
+    lv_obj_set_style_border_width(s_picker, 0, 0);
+    lv_obj_set_style_pad_all(s_picker, 0, 0);
+    lv_obj_set_style_radius(s_picker, 0, 0);
+    lv_obj_add_event_cb(s_picker, picker_mask_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_move_foreground(s_picker);
+
+    static const char *const names[3] = { "常驻", "小圈", "大圈" };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *card = lv_btn_create(s_picker);
+        lv_obj_set_size(card, 88, 88);
+        lv_obj_set_pos(card, (UI_W - (88 * 3 + 12 * 2)) / 2 + i * (88 + 12),
+                       108 - 44);
+        lv_obj_set_style_bg_color(card, COL_PAPER, 0);
+        lv_obj_set_style_bg_opa(card, LV_OPA_90, 0);
+        lv_obj_set_style_radius(card, 12, 0);
+        lv_obj_set_style_shadow_width(card, 0, 0);
+        lv_obj_add_event_cb(card, picker_pick_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        /* 当前模式: 2px 奶油黄描边 + scale 1.05 */
+        bool cur = (int)s_mode == i;
+        lv_obj_set_style_border_width(card, cur ? 2 : 0, 0);
+        lv_obj_set_style_border_color(card, COL_CREAM, 0);
+        if (cur) lv_obj_set_style_transform_scale(card, 268, 0);  /* ~1.05 */
+        lv_obj_t *l = lv_label_create(card);
+        lv_label_set_text(l, names[i]);
+        lv_obj_set_style_text_color(l, COL_NIGHT, 0);
+        lv_obj_center(l);
+        s_picker_card[i] = card;
+    }
+    s_picker_idle = lv_timer_create(picker_idle_cb, 3000, NULL);
+}
+static void on_layer_long_press(lv_event_t *e)
+{
+    (void)e;
+    if (s_mode == MODE_CAMERA || s_publish_pending) return;  /* 拍照/预览态不呼出 */
+    picker_open();
+}
+
+/* ---- 轻系统页 (规范 §6: 上滑呼出, 高 172px 底部伸出) ---- */
+static void sheet_close_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_sheet) lv_obj_add_flag(s_sheet, LV_OBJ_FLAG_HIDDEN);
+}
+static void sheet_sleep_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_sheet) lv_obj_add_flag(s_sheet, LV_OBJ_FLAG_HIDDEN);
+    sleep_enter();
+}
+static void sheet_skin_cb(lv_event_t *e)
+{
+    (void)e;
+    toast_show("皮肤套件后续上线");
+}
+static void ui_sheet_open(void)
+{
+    if (!s_sheet || s_sleeping || s_publish_pending) return;
+    lv_obj_clear_flag(s_sheet, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_sheet);
+}
+static void sheet_build(lv_obj_t *scr)
+{
+    s_sheet = lv_obj_create(scr);
+    lv_obj_set_size(s_sheet, UI_W, 172);
+    lv_obj_set_pos(s_sheet, 0, UI_H - 172);
+    lv_obj_set_style_bg_color(s_sheet, COL_NIGHT, 0);
+    lv_obj_set_style_bg_opa(s_sheet, LV_OPA_90, 0);
+    lv_obj_set_style_border_width(s_sheet, 0, 0);
+    lv_obj_set_style_radius(s_sheet, 0, 0);
+    lv_obj_set_style_pad_all(s_sheet, 0, 0);
+    lv_obj_add_flag(s_sheet, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_sheet, on_layer_gesture, LV_EVENT_GESTURE, NULL);
+
+    /* 状态栏: WiFi + 固件版本 */
+    lv_obj_t *top = lv_label_create(s_sheet);
+    lv_label_set_text(top, "Presence Card OS  v" FW_VERSION);
+    lv_obj_set_style_text_color(top, COL_PAPER, 0);
+    lv_obj_set_pos(top, 10, 6);
+
+    /* 皮肤三卡 (P1 占位) */
+    static const char *const skins[3] = { "草地手贴", "纯净胶片", "夜间床头" };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *sk = lv_btn_create(s_sheet);
+        lv_obj_set_size(sk, 88, 64);
+        lv_obj_set_pos(sk, 12 + i * (88 + 14), 30);
+        lv_obj_set_style_bg_color(sk, lv_color_make(0x2a, 0x2e, 0x2a), 0);
+        lv_obj_set_style_radius(sk, 8, 0);
+        lv_obj_set_style_border_width(sk, 2, 0);
+        lv_obj_set_style_border_color(sk, COL_PAPER, 0);
+        lv_obj_set_style_shadow_width(sk, 0, 0);
+        lv_obj_add_event_cb(sk, sheet_skin_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(sk);
+        lv_label_set_text(l, skins[i]);
+        lv_obj_set_style_text_color(l, COL_PAPER, 0);
+        lv_obj_center(l);
+    }
+
+    /* 息屏按钮 */
+    lv_obj_t *slp = lv_btn_create(s_sheet);
+    lv_obj_set_size(slp, 88, 32);
+    lv_obj_set_pos(slp, 12, 112);
+    lv_obj_set_style_bg_color(slp, COL_SKY, 0);
+    lv_obj_set_style_radius(slp, 16, 0);
+    lv_obj_set_style_shadow_width(slp, 0, 0);
+    lv_obj_add_event_cb(slp, sheet_sleep_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *sl = lv_label_create(slp);
+    lv_label_set_text(sl, "息屏");
+    lv_obj_set_style_text_color(sl, COL_PAPER, 0);
+    lv_obj_center(sl);
+
+    /* 收起按钮 (右下) */
+    lv_obj_t *cls = lv_btn_create(s_sheet);
+    lv_obj_set_size(cls, 88, 32);
+    lv_obj_set_pos(cls, UI_W - 100, 112);
+    lv_obj_set_style_bg_color(cls, lv_color_make(0x2a, 0x2e, 0x2a), 0);
+    lv_obj_set_style_radius(cls, 16, 0);
+    lv_obj_set_style_shadow_width(cls, 0, 0);
+    lv_obj_add_event_cb(cls, sheet_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cl = lv_label_create(cls);
+    lv_label_set_text(cl, "收起");
+    lv_obj_set_style_text_color(cl, COL_PAPER, 0);
+    lv_obj_center(cl);
+}
+
+
+/* feed 对象声明已前移至状态机区; 此处为函数实现 */
 
 /* 拉取缓存快照; 小圈模式下只保留带小圈标记的条目 */
 static int feed_snapshot_filtered(void)
@@ -1478,6 +1897,7 @@ static void on_feed_heart(lv_event_t *e)
 static void on_feed_canvas_click(lv_event_t *e)
 {
     (void)e;
+    if (s_sleeping) { sleep_wake(); return; }   /* 息屏: 单击唤醒 (§7) */
     s_feed_auto = false;
     lv_indev_t *indev = lv_indev_active();
     if (indev) {
@@ -1554,6 +1974,13 @@ static void arrival_hide_cb(lv_timer_t *t)
 void ui_net_feed_updated(int total, int fresh, int new_likes)
 {
     if (!bsp_display_lock(1000)) return;
+
+    /* 息屏模式 (§7): 静默入库——不亮屏、不闪现、不发声, 唤醒时补播 */
+    if (s_sleeping) {
+        s_sleep_missed += fresh;
+        bsp_display_unlock();
+        return;
+    }
 
     if (new_likes > 0) {                  /* 被赞: 飘字 + 音效 */
         pvc_sound_play(PVC_SND_LIKE);
@@ -1773,7 +2200,7 @@ static void btn_mirror_cb(lv_event_t *e)
 static void btn_feed_cb(lv_event_t *e)
 {
     (void)e;
-    open_feed();
+    set_mode(MODE_CIRCLE);
 }
 
 /* 工程模式 (docs/02 §6): 长按"动态"键 -> 串口打印 token 前 8 位等调试信息 */
@@ -1810,9 +2237,12 @@ void ui_beauty_camera_create(void)
     lv_canvas_set_buffer(s_canvas, s_canvas_buf, UI_W, UI_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_set_pos(s_canvas, 0, 0);
     lv_obj_set_style_bg_opa(s_canvas, LV_OPA_TRANSP, 0);
+    /* 相机模式手势: 左右轻划切滤镜 / 上滑退出 (规范 §5) */
+    lv_obj_add_event_cb(s_canvas, on_layer_gesture, LV_EVENT_GESTURE, NULL);
 
     /* 顶部只保留关系入口与联网圆点，不占一整条状态栏。 */
     lv_obj_t *feed_hot = lv_btn_create(scr);
+    s_feed_hot = feed_hot;
     lv_obj_set_size(feed_hot, 72, 58);
     lv_obj_set_pos(feed_hot, 0, 0);
     style_tool_btn(feed_hot);
@@ -1869,6 +2299,7 @@ void ui_beauty_camera_create(void)
 
     /* ---------- 底部三分区：小图标，大热区 ---------- */
     lv_obj_t *bar = lv_obj_create(scr);
+    s_bar = bar;
     lv_obj_set_size(bar, UI_W, BAR_H);
     lv_obj_set_pos(bar, 0, UI_H - BAR_H);
     lv_obj_set_style_bg_color(bar, lv_color_black(), 0);
@@ -1888,7 +2319,7 @@ void ui_beauty_camera_create(void)
     icon_filter(b_filter, (104 - 28) / 2, (BAR_H - 23) / 2,
                 lv_color_make(0xf8, 0xf5, 0xee));
 
-    /* 双细线快门；112x60 热区，按下立即缩放反馈。 */
+    /* 快门 Ø44 白圈 3px 描边 (规范 §5); 112x60 热区, 按下立即缩放反馈。 */
     lv_obj_t *b_shutter = lv_btn_create(bar);
     lv_obj_set_size(b_shutter, 112, BAR_H);
     lv_obj_set_pos(b_shutter, 104, 0);
@@ -1896,23 +2327,14 @@ void ui_beauty_camera_create(void)
     lv_obj_add_event_cb(b_shutter, btn_shutter_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(b_shutter, btn_album_cb, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_t *shutter_ring = lv_obj_create(b_shutter);
-    lv_obj_set_size(shutter_ring, 52, 52);
+    lv_obj_set_size(shutter_ring, 44, 44);
     lv_obj_center(shutter_ring);
     lv_obj_set_style_bg_opa(shutter_ring, LV_OPA_TRANSP, 0);
     lv_obj_set_style_radius(shutter_ring, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(shutter_ring, 3, 0);
-    lv_obj_set_style_border_color(shutter_ring, lv_color_make(0xf8, 0xf5, 0xee), 0);
+    lv_obj_set_style_border_color(shutter_ring, COL_PAPER, 0);
     lv_obj_set_style_pad_all(shutter_ring, 0, 0);
     lv_obj_remove_flag(shutter_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t *shutter_inner = lv_obj_create(shutter_ring);
-    lv_obj_set_size(shutter_inner, 40, 40);
-    lv_obj_center(shutter_inner);
-    lv_obj_set_style_bg_opa(shutter_inner, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_radius(shutter_inner, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(shutter_inner, 1, 0);
-    lv_obj_set_style_border_color(shutter_inner, lv_color_make(0xf8, 0xf5, 0xee), 0);
-    lv_obj_set_style_pad_all(shutter_inner, 0, 0);
-    lv_obj_remove_flag(shutter_inner, LV_OBJ_FLAG_CLICKABLE);
 
     /* 自拍方向：104x60 热区。 */
     lv_obj_t *b_mirror = lv_btn_create(bar);
@@ -2005,6 +2427,10 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_radius(s_feed_panel, 0, 0);
     lv_obj_set_style_shadow_width(s_feed_panel, 0, 0);
     lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
+    /* 小圈/大圈流手势: 左右翻页 / 下滑拍照 / 上滑系统页; 长按=选择盘 */
+    lv_obj_add_event_cb(s_feed_panel, on_layer_gesture, LV_EVENT_GESTURE, NULL);
+    lv_obj_add_event_cb(s_feed_panel, on_layer_long_press,
+                        LV_EVENT_LONG_PRESSED, NULL);
 
     if (s_feed_buf) {
         s_feed_canvas = lv_canvas_create(s_feed_panel);
@@ -2104,7 +2530,54 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_text_color(f_circle_l, lv_color_white(), 0);
     lv_obj_center(f_circle_l);
 
+    /* ---------- 常驻模式画布 (v1.1 §1: 默认屏 = 常驻主图/足迹) ---------- */
+    s_home_buf = PSRAM_MALLOC(FRAME_BYTES);
+    if (s_home_buf) {
+        s_home_canvas = lv_canvas_create(scr);
+        lv_canvas_set_buffer(s_home_canvas, s_home_buf, UI_W, UI_H,
+                             LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_pos(s_home_canvas, 0, 0);
+        lv_obj_set_style_bg_opa(s_home_canvas, LV_OPA_TRANSP, 0);
+        hw2d_fill(s_home_buf, UI_W * UI_H, rgb565(0x1a, 0x1d, 0x1a));
+        /* HOME 手势: 左右翻足迹 / 下滑拍照 / 上滑系统页 / 长按选择盘 */
+        lv_obj_add_event_cb(s_home_canvas, on_layer_gesture,
+                            LV_EVENT_GESTURE, NULL);
+        lv_obj_add_event_cb(s_home_canvas, on_layer_long_press,
+                            LV_EVENT_LONG_PRESSED, NULL);
+        lv_obj_add_flag(s_home_canvas, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_home_canvas, on_home_click,
+                            LV_EVENT_CLICKED, NULL);
+
+        /* 空态提示 (首次使用, 无足迹无云端主图) */
+        s_home_hint = lv_label_create(scr);
+        lv_label_set_text(s_home_hint, "下滑拍照");
+        lv_obj_set_style_text_color(s_home_hint, COL_PAPER, 0);
+        lv_obj_set_style_text_opa(s_home_hint, LV_OPA_60, 0);
+        lv_obj_center(s_home_hint);
+    }
+
+    /* 模式名贴纸 (切模式浮现 1.5s) */
+    s_mode_tag = lv_label_create(scr);
+    lv_obj_set_style_bg_color(s_mode_tag, COL_LILAC, 0);
+    lv_obj_set_style_bg_opa(s_mode_tag, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(s_mode_tag, 1, 0);
+    lv_obj_set_style_border_color(s_mode_tag, lv_color_white(), 0);
+    lv_obj_set_style_radius(s_mode_tag, 4, 0);
+    lv_obj_set_style_pad_hor(s_mode_tag, 8, 0);
+    lv_obj_set_style_pad_ver(s_mode_tag, 2, 0);
+    lv_obj_set_style_text_color(s_mode_tag, COL_NIGHT, 0);
+    lv_obj_align(s_mode_tag, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_add_flag(s_mode_tag, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_mode_tag, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 轻系统页 (上滑呼出) */
+    sheet_build(scr);
+
     update_status();
+
+    /* 初始模式: 有足迹/云端内容则常驻屏, 否则直接相机 (首次使用引导) */
+    scan_footprints();
+    set_mode(s_foot_n > 0 ? MODE_HOME : MODE_CAMERA);
 
     /* 预览刷新定时器: 12.5 FPS。自拍取景足够流畅, 且把 core0/LVGL 任务
      * 从全屏渲染中解放出来 —— 25FPS 时触摸采样被饿死, 点按明显迟钝 */
