@@ -1,4 +1,4 @@
-import { fetchWithUserSession } from './user-session.js'
+import { fetchWithUserSession, setUserToken, clearUserToken } from './user-session.js'
 
 export type PlayType = 'beauty' | 'ccd' | 'template'
 
@@ -17,6 +17,7 @@ export type FeedItem = {
   my_reactions?: string[]
   mine?: boolean
   circle?: string
+  circle_id?: string | null
 }
 
 export type Message = {
@@ -33,6 +34,10 @@ export type Message = {
 export type Friend = { username: string; display_name: string }
 export type FriendRequest = { id: string; status: 'pending' | 'accepted'; direction: 'incoming' | 'outgoing'; requester: Friend; addressee: Friend; created_at: string }
 export type CurrentUser = { id: string; username: string; display_name: string; friend_code: string }
+
+export type CircleInfo = { id: string; name: string; type: 'small' | 'big'; joined: boolean; photo_count: number; subscriber_count: number }
+
+export type AuthResult = { token: string; expires_in: number; user: CurrentUser }
 
 export type AiJob = {
   id: string
@@ -154,30 +159,78 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   return request<CurrentUser>('/me')
 }
 
-export async function getFeed(): Promise<FeedItem[]> {
+export async function getFeed(circleId?: string): Promise<FeedItem[]> {
   try {
-    const data = await request<{ items?: FeedItem[] }>('/feed?limit=20', { cache: 'no-store' })
+    const query = circleId && circleId !== 'all' ? `&circle_id=${encodeURIComponent(circleId)}` : ''
+    const data = await request<{ items?: FeedItem[] }>(`/feed?limit=20${query}`, { cache: 'no-store' })
     return (data.items ?? []).map(item => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoAssetByPhotoId[item.photo_id] ?? item.image_url } : { ...item, id: item.photo_id ?? item.id })
   } catch (error) {
-    return offlineFallback(error, () => demoFeed)
+    const circleName = circleId ? circlesByIdFallback[circleId] : undefined
+    return offlineFallback(error, () => circleName ? demoFeed.filter(item => item.circle === circleName) : demoFeed)
   }
 }
 
-export async function uploadPhoto(file: File, options: { filterId: string; caption: string; play: PlayType; beauty: number; sticker: string; circle?: string }): Promise<FeedItem> {
+const circlesByIdFallback: Record<string, string> = { c_small: '小圈', c_sky: '傍晚的天空', c_film: '胶片味', c_desk: '宿舍窗台' }
+
+export async function getCircles(): Promise<CircleInfo[]> {
+  const data = await request<{ items: CircleInfo[] }>('/circles')
+  return data.items
+}
+
+export async function createCircle(name: string): Promise<CircleInfo> {
+  const circle = await request<CircleInfo>('/circles', { method: 'POST', body: JSON.stringify({ name }) })
+  return { ...circle, joined: circle.joined ?? true, subscriber_count: circle.subscriber_count ?? 1, photo_count: circle.photo_count ?? 0 }
+}
+
+export async function joinCircle(id: string): Promise<CircleInfo> {
+  const circle = await request<CircleInfo>(`/circles/${id}/join`, { method: 'POST', body: JSON.stringify({}) })
+  return { ...circle, joined: true }
+}
+
+export async function leaveCircle(id: string): Promise<void> {
+  await request(`/circles/${id}/leave`, { method: 'POST', body: JSON.stringify({}) })
+}
+
+export async function getCircleFeed(circleId: string, limit = 32): Promise<FeedItem[]> {
+  const data = await request<{ items: FeedItem[] }>(`/circles/${circleId}/feed?limit=${limit}`, { cache: 'no-store' })
+  return (data.items ?? []).map(item => ({ ...item, id: item.photo_id ?? item.id }))
+}
+
+export async function registerAccount(options: { username: string; password: string; displayName?: string; inviteCode?: string }): Promise<AuthResult> {
+  const result = await request<AuthResult & { user: CurrentUser }>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ username: options.username, password: options.password, display_name: options.displayName, invite_code: options.inviteCode }),
+  })
+  setUserToken(result.token)
+  return result
+}
+
+export async function loginAccount(username: string, password: string): Promise<AuthResult> {
+  const result = await request<AuthResult & { user: CurrentUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+  setUserToken(result.token)
+  return result
+}
+
+export async function logoutAccount(): Promise<void> {
+  try { await request('/auth/logout', { method: 'POST', body: JSON.stringify({}) }) } catch { /* token may already be invalid */ }
+  clearUserToken()
+}
+
+export async function uploadPhoto(file: File, options: { filterId: string; caption: string; play: PlayType; beauty: number; sticker: string; circle?: string; circleId?: string }): Promise<FeedItem> {
   const localUrl = URL.createObjectURL(file)
   try {
     const processed = await jpegPayload(file, options)
     const payload = processed.blob
     const circle = options.circle ?? '小圈'
-    const response = await fetchWithUserSession(`${API}/photos`, { method: 'POST', body: payload, headers: { 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Circle': encodeURIComponent(circle), 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
+    const response = await fetchWithUserSession(`${API}/photos`, { method: 'POST', body: payload, headers: { 'Content-Type': 'image/jpeg', 'Idempotency-Key': `web-${Date.now()}`, 'X-Filter-Id': options.filterId, 'X-Play-Type': options.play, 'X-Beauty': String(options.beauty), 'X-Sticker': options.sticker, 'X-Circle': encodeURIComponent(circle), ...(options.circleId ? { 'X-Circle-Id': options.circleId } : {}), 'X-Caption': encodeURIComponent(options.caption), 'X-Width': String(processed.width || 1080), 'X-Height': String(processed.height || 1350) } })
     if (!response.ok) throw new ApiError(response.status, (await response.text()) || `Request failed: ${response.status}`)
     const result = await response.json() as { photo_id: string; url?: string; created_at?: string }
     const imageUrl = result.url ?? localUrl
     if (result.url) URL.revokeObjectURL(localUrl)
-    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: imageUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle }
+    return { id: result.photo_id, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption, created_at: result.created_at ?? new Date().toISOString(), image_url: imageUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle, circle_id: options.circleId ?? null }
   } catch (error) {
     if (!(error instanceof TypeError)) throw error
-    return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: options.circle ?? '小圈' }
+    return { id: `local-${Date.now()}`, author: { username: 'me', display_name: '我' }, filter_id: options.filterId, play_type: options.play, beauty: options.beauty, sticker: options.sticker, caption: options.caption || '刚刚释放了一张照片。', created_at: new Date().toISOString(), image_url: localUrl, reactions: { heart: 0, star: 0 }, my_reactions: [], mine: true, circle: options.circle ?? '小圈', circle_id: options.circleId ?? null }
   }
 }
 

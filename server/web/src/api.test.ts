@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, createCircle, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCircleFeed, getCircles, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, joinCircle, leaveCircle, loginAccount, logoutAccount, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, registerAccount, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
 import { clearUserToken, setUserToken } from './user-session.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
@@ -234,6 +234,117 @@ test('feed circle filtering keeps all view broad and named circles exact', () =>
   assert.deepEqual(filterFeedByCircle(feed, '全部').map(item => item.id), ['small', 'sky', 'film'])
   assert.deepEqual(filterFeedByCircle(feed, '傍晚的天空').map(item => item.id), ['sky'])
   assert.deepEqual(filterFeedByCircle(feed, '小圈').map(item => item.id), ['small'])
+})
+
+test('circle helpers hit the circles endpoints and mark join state locally', async () => {
+  const calls: Array<{ url: string; method: string }> = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    calls.push({ url, method })
+    if (url === '/v1/circles' && method === 'GET') return new Response(JSON.stringify({ items: [{ id: 'c_sky', name: '傍晚的天空', type: 'big', joined: false, photo_count: 3, subscriber_count: 2 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url === '/v1/circles' && method === 'POST') return new Response(JSON.stringify({ id: 'c_new', name: '新的大圈', type: 'big', joined: true, photo_count: 0, subscriber_count: 1 }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/join')) return new Response(JSON.stringify({ id: 'c_sky', name: '傍晚的天空', type: 'big', joined: true, photo_count: 3, subscriber_count: 3 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/leave')) return new Response(null, { status: 204 })
+    return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const list = await getCircles()
+    assert.equal(list[0].id, 'c_sky')
+    const created = await createCircle('新的大圈')
+    assert.equal(created.joined, true)
+    const joined = await joinCircle('c_sky')
+    assert.equal(joined.joined, true)
+    await leaveCircle('c_sky')
+    assert.deepEqual(calls, [
+      { url: '/v1/circles', method: 'GET' },
+      { url: '/v1/circles', method: 'POST' },
+      { url: '/v1/circles/c_sky/join', method: 'POST' },
+      { url: '/v1/circles/c_sky/leave', method: 'POST' },
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('circle feed helper reads the circle-scoped feed endpoint', async () => {
+  const originalFetch = globalThis.fetch
+  let request: { url: string; method?: string } | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = { url: String(input), method: init?.method ?? 'GET' }
+    return new Response(JSON.stringify({ items: [{ photo_id: 'p_cur_1', author: { username: 'curator_sky', display_name: '天空收录员' }, filter_id: 'warm', image_url: '/v1/photos/p_cur_1/image', reactions: {}, circle_id: 'c_sky' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const items = await getCircleFeed('c_sky')
+    assert.equal(items[0].id, 'p_cur_1')
+    assert.deepEqual(request, { url: '/v1/circles/c_sky/feed?limit=32', method: 'GET' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('auth helpers complete register, login and logout against the session endpoints', async () => {
+  const calls: Array<{ url: string; method: string; body?: string }> = []
+  const originalFetch = globalThis.fetch
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const values = new Map<string, string>()
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+  } as Storage })
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    calls.push({ url, method, body: init?.body ? String(init.body) : undefined })
+    if (url.endsWith('/register')) return new Response(JSON.stringify({ token: 'sess_register', expires_in: 259200, user: { id: 'u_new', username: 'nova', display_name: '新星', friend_code: '200001' } }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/login')) return new Response(JSON.stringify({ token: 'sess_login', expires_in: 259200, user: { id: 'u_demo_1', username: 'ayan', display_name: '阿岩', friend_code: '100001' } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/logout')) return new Response(null, { status: 204 })
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const registered = await registerAccount({ username: 'nova', password: 'secret66', displayName: '新星', inviteCode: '100001' })
+    assert.equal(registered.user.username, 'nova')
+    assert.equal(values.get('presence.user-token'), 'sess_register')
+    const loggedIn = await loginAccount('ayan', 'demo1234')
+    assert.equal(loggedIn.user.username, 'ayan')
+    assert.equal(values.get('presence.user-token'), 'sess_login')
+    await logoutAccount()
+    assert.equal(values.has('presence.user-token'), false)
+    assert.deepEqual(calls, [
+      { url: '/v1/auth/register', method: 'POST', body: JSON.stringify({ username: 'nova', password: 'secret66', display_name: '新星', invite_code: '100001' }) },
+      { url: '/v1/auth/login', method: 'POST', body: JSON.stringify({ username: 'ayan', password: 'demo1234' }) },
+      { url: '/v1/auth/logout', method: 'POST', body: '{}' },
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+    if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor)
+    else delete (globalThis as typeof globalThis & { localStorage?: Storage }).localStorage
+  }
+})
+
+test('web photo upload stamps the circle id when publishing to a big circle', async () => {
+  const originalFetch = globalThis.fetch
+  const originalCreateObjectUrl = URL.createObjectURL
+  const originalRevokeObjectUrl = URL.revokeObjectURL
+  let capturedHeaders: Headers | undefined
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedHeaders = new Headers(init?.headers)
+    return new Response(JSON.stringify({ photo_id: 'p_big_circle', url: '/v1/photos/p_big_circle/image', created_at: '2026-08-30T00:00:00.000Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  URL.createObjectURL = (() => 'blob:test-big-circle') as typeof URL.createObjectURL
+  URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
+  try {
+    const photo = await uploadPhoto(new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'capture.jpg', { type: 'image/jpeg' }), { filterId: 'film', caption: '颗粒', play: 'ccd', beauty: 0, sticker: 'none', circle: '胶片味', circleId: 'c_film' })
+    assert.equal(photo.circle, '胶片味')
+    assert.equal(photo.circle_id, 'c_film')
+    assert.equal(capturedHeaders?.get('X-Circle-Id'), 'c_film')
+  } finally {
+    globalThis.fetch = originalFetch
+    URL.createObjectURL = originalCreateObjectUrl
+    URL.revokeObjectURL = originalRevokeObjectUrl
+  }
 })
 
 test('device feed helper reads the authenticated device feed endpoint', async () => {
