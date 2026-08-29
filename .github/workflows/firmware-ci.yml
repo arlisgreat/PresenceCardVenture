@@ -22,3 +22,16 @@ jobs:
           name: firmware-bin
           path: firmware/.pio/build/*/firmware.bin
           retention-days: 30
+
+  # host 端算法压测: Linux 上 ASAN 可用 (macOS Apple clang ASAN 有环境性
+  # dyld 卡死, 本地默认走 UBSAN; 真 ASAN 由本 job 每次 PR 兜底)
+  host-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: UBSAN + guard bands
+        run: ./test/host/run_asan.sh
+        working-directory: firmware
+      - name: ASAN + UBSAN
+        run: ./test/host/run_asan.sh asan
+        working-directory: firmware
