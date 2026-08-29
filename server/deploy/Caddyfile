@@ -1,0 +1,11 @@
+# 域名由 deploy/.env 注入；Caddy 管理 HTTPS。
+
+{$API_DOMAIN} {
+	reverse_proxy api:3000
+}
+
+{$APP_DOMAIN} {
+	root * /srv/web
+	encode zstd gzip
+	file_server
+}

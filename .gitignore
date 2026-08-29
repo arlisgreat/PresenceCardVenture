@@ -1,3 +1,13 @@
-.claude/settings.local.json
+﻿node_modules/
+dist/
+.env
+*.local
 .DS_Store
 Thumbs.db
+.claude/settings.local.json
+.pio/
+.vscode/
+*.log
+# ESP-IDF 生成物 (由 sdkconfig.defaults / idf_component.yml 再生)
+firmware/managed_components/
+firmware/sdkconfig.cores3

@@ -1,0 +1,347 @@
+openapi: 3.0.3
+info:
+  title: 小卡 Device API
+  version: 0.1.0
+  description: |
+    设备端（ESP32-S3）API 规范 v1 —— 权威文档见 `02-device-api-v1.md`。
+    本文件用于导入 Postman/Apifox 调试或生成 mock server。
+    Web 社区端接口（注册/登录/好友请求/绑定设备等）不在本文件范围内。
+servers:
+  - url: https://api-dev.example.com/v1
+    description: dev 环境（联调用）
+  - url: https://api.example.com/v1
+    description: 生产
+
+tags:
+  - { name: pairing, description: 设备配对绑定（无需认证） }
+  - { name: photos, description: 照片上传/下载 }
+  - { name: feed, description: 好友动态 }
+  - { name: friends, description: 好友 }
+  - { name: device, description: 设备状态/心跳 }
+
+paths:
+  /pair/code:
+    post:
+      tags: [pairing]
+      summary: 领取配对码
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id]
+              properties:
+                device_id: { type: string, example: dvc_a1b2c3d4e5f6 }
+                fw_version: { type: string, example: "0.1.0" }
+                hw: { type: string, example: cams3-lite }
+      responses:
+        "200":
+          description: 配对码
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pair_code: { type: string, example: "482913" }
+                  expires_in: { type: integer, example: 600 }
+
+  /pair/status:
+    get:
+      tags: [pairing]
+      summary: 轮询配对状态
+      security: []
+      parameters:
+        - { name: device_id, in: query, required: true, schema: { type: string } }
+        - { name: pair_code, in: query, required: true, schema: { type: string } }
+      responses:
+        "202":
+          description: 等待用户绑定
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: pending }
+        "200":
+          description: 绑定成功，返回设备 token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: bound }
+                  device_token: { type: string, example: ak_9f2e64chars }
+                  user:
+                    type: object
+                    properties:
+                      username: { type: string }
+                      display_name: { type: string }
+        "410":
+          description: 配对码过期
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /photos:
+    post:
+      tags: [photos]
+      summary: 上传照片（JPEG 原始字节）
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string }, description: "{device_id}-{boot}-{seq}，重试同键" }
+        - { name: X-Filter-Id, in: header, required: true, schema: { type: string, example: warm } }
+        - { name: X-Caption, in: header, required: false, schema: { type: string }, description: "URL-encode 的 UTF-8，≤140 字符" }
+        - { name: X-Width, in: header, required: true, schema: { type: integer, example: 320 } }
+        - { name: X-Height, in: header, required: true, schema: { type: integer, example: 240 } }
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema: { type: string, format: binary }
+      responses:
+        "201":
+          description: "上传成功（幂等重试返回 200 + 首次响应体）"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhotoUploadResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: 超过 1MB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /photos/{photo_id}/image:
+    get:
+      tags: [photos]
+      summary: 下载照片（320x240 JPEG）
+      parameters:
+        - { name: photo_id, in: path, required: true, schema: { type: string } }
+        - { name: size, in: query, required: false, schema: { type: integer, default: 320 }, description: "预留，MVP 仅一档" }
+      responses:
+        "200":
+          description: "JPEG 字节流（Cache-Control: immutable）"
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "404":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /photos/mine:
+    get:
+      tags: [photos]
+      summary: 我上传过的照片
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 8, maximum: 32 } }
+      responses:
+        "200":
+          description: 结构同 /feed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedPage" }
+
+  /feed:
+    get:
+      tags: [feed]
+      summary: 好友动态（自己+好友，倒序）
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 8, maximum: 32 } }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: 一页动态
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedPage" }
+        "304":
+          description: 无更新（ETag 命中）
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /photos/{photo_id}/reactions:
+    post:
+      tags: [feed]
+      summary: 发送反应
+      parameters:
+        - { name: photo_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [heart, thumbsup, wow] }
+      responses:
+        "201":
+          description: 最新计数
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reactions:
+                    type: object
+                    additionalProperties: { type: integer }
+                    example: { heart: 3 }
+
+  /photos/{photo_id}/reactions/{type}:
+    delete:
+      tags: [feed]
+      summary: 取消反应
+      parameters:
+        - { name: photo_id, in: path, required: true, schema: { type: string } }
+        - { name: type, in: path, required: true, schema: { type: string, enum: [heart, thumbsup, wow] } }
+      responses:
+        "204": { description: 已取消 }
+
+  /friends:
+    get:
+      tags: [friends]
+      summary: 好友列表
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    username: { type: string }
+                    display_name: { type: string }
+                    since: { type: string, format: date-time }
+
+  /friends/claim:
+    post:
+      tags: [friends]
+      summary: "[Phase 2 预留] 兑换离线好友票，MVP 返回 501"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket]
+              properties:
+                ticket: { type: string }
+      responses:
+        "501": { description: MVP 未实现 }
+        "201": { description: 好友关系已建立 }
+
+  /device/state:
+    get:
+      tags: [device]
+      summary: 设备状态（唤醒后首调）
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unseen_count: { type: integer, example: 3 }
+                  pending_friend_requests: { type: integer, example: 1 }
+                  server_time: { type: string, format: date-time }
+                  fw_latest:
+                    type: object
+                    nullable: true
+                    properties:
+                      version: { type: string }
+                      url: { type: string }
+                      md5: { type: string }
+
+  /device/heartbeat:
+    post:
+      tags: [device]
+      summary: 心跳（可选，调试用）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                battery: { type: integer }
+                rssi: { type: integer }
+                fw_version: { type: string }
+                free_heap: { type: integer }
+      responses:
+        "204": { description: 已接收 }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "device_token，配对成功后获得"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: PHOTO_TOO_LARGE }
+            message: { type: string }
+
+    PhotoUploadResult:
+      type: object
+      properties:
+        photo_id: { type: string, example: p_01J8XYZ }
+        url: { type: string }
+        created_at: { type: string, format: date-time }
+        daily_remaining: { type: integer, example: 57 }
+
+    FeedItem:
+      type: object
+      properties:
+        photo_id: { type: string }
+        author:
+          type: object
+          properties:
+            username: { type: string }
+            display_name: { type: string }
+        filter_id: { type: string, example: warm }
+        caption: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        width: { type: integer }
+        height: { type: integer }
+        image_url: { type: string }
+        reactions:
+          type: object
+          additionalProperties: { type: integer }
+          example: { heart: 2, wow: 1 }
+        my_reactions:
+          type: array
+          items: { type: string }
+
+    FeedPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/FeedItem" }
+        next_cursor: { type: string, nullable: true }
+        etag: { type: string }
+
+  responses:
+    Unauthorized:
+      description: "token 无效/被解绑 → 清 NVS token，回配对流程"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: "超限，响应含 retry_after（秒），严格退避"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+security:
+  - bearerAuth: []
