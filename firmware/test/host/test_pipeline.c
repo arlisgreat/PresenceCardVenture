@@ -237,6 +237,31 @@ int main(void)
         CHECK(rot_ok, "fused rot180 != reversed straight output");
     }
 
+    /* ---- 自拍镜像: 按行翻转, 两次恢复; YUYV 色度跟随宏像素 ---- */
+    {
+        uint16_t rgb[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        static const uint16_t rgb_m[] = { 4, 3, 2, 1, 8, 7, 6, 5 };
+        hw2d_rgb565_hmirror(rgb, 4, 2);
+        CHECK(memcmp(rgb, rgb_m, sizeof(rgb)) == 0, "rgb hmirror mapping");
+        hw2d_rgb565_hmirror(rgb, 4, 2);
+        for (int i = 0; i < 8; i++) CHECK(rgb[i] == i + 1, "rgb hmirror twice @%d", i);
+
+        uint8_t yuv[] = {
+            10, 100, 11, 150, 20, 101, 21, 151,
+            30, 102, 31, 152, 40, 103, 41, 153,
+        };
+        uint8_t yuv_orig[sizeof(yuv)];
+        static const uint8_t yuv_m[] = {
+            21, 101, 20, 151, 11, 100, 10, 150,
+            41, 103, 40, 153, 31, 102, 30, 152,
+        };
+        memcpy(yuv_orig, yuv, sizeof(yuv));
+        hw2d_yuv_hmirror(yuv, 4, 2);
+        CHECK(memcmp(yuv, yuv_m, sizeof(yuv)) == 0, "yuv hmirror mapping");
+        hw2d_yuv_hmirror(yuv, 4, 2);
+        CHECK(memcmp(yuv, yuv_orig, sizeof(yuv)) == 0, "yuv hmirror twice");
+    }
+
     /* ---- OTA 纯逻辑: 语义版本比较 + MD5 hex 解析 (含模糊) ---- */
     {
         static const struct { const char *a, *b; int want; } vc[] = {

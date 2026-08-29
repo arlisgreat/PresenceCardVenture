@@ -184,6 +184,10 @@ void hw2d_yuv_filter_rgb565_rot180_stat(uint16_t *dst, const uint8_t *src,
 /* YUYV422 原地 180 度旋转 (拍照链: 快照进 worker 先转再处理, ~2ms) */
 void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix);
 
+/* 自拍镜像: RGB565 预览与 YUYV422 成片均按行水平翻转; 调用两次恢复原图。 */
+void hw2d_rgb565_hmirror(uint16_t *rgb, uint32_t w, uint32_t h);
+void hw2d_yuv_hmirror(uint8_t *yuyv, uint32_t w, uint32_t h);
+
 /* YUYV 磨皮: 仅 3x3 平滑 Y 平面 (经典磨皮: 平亮度保色度, 算量 1/3)。
  * dst 可等于 src; 内部借用 blur 平面缓冲 (单任务调用, 与 blur3x3 互斥) */
 void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,

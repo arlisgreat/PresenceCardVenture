@@ -65,8 +65,8 @@ static const char *TAG = "ui_camera";
 
 #define UI_W 320
 #define UI_H 240
-#define STATUS_H 20
-#define BAR_H 40
+#define STATUS_H 24
+#define BAR_H 52
 #define FRAME_BYTES (UI_W * UI_H * 2)      /* RGB565 全屏 */
 
 /* 系统统一 QVGA 320x240 (产品只要求 QVGA JPEG): 采集=预览=拍照, 零缩放 */
@@ -74,8 +74,6 @@ static const char *TAG = "ui_camera";
 #define CAP_H UI_H
 #define CAP_BYTES (CAP_W * CAP_H * 2)      /* QVGA 单帧 RGB565 (150KB, PSRAM) */
 
-#define SIDEBAR_X 4                        /* 左侧滤镜条 */
-#define SIDEBAR_Y (STATUS_H + 4)
 #define THUMB_SZ 22                        /* 滤镜缩略图尺寸 */
 
 #define MAX_ALBUM_ITEMS 6
@@ -91,8 +89,6 @@ static void close_panel(void);
 static void panel_done_cb(lv_event_t *e);
 static void style_tool_btn(lv_obj_t *btn);
 static void open_filter_panel(void);
-static void on_filter_long_press(lv_event_t *e);
-static void on_beauty_card_click(lv_event_t *e);
 static void open_feed(void);
 static void render_feed(void);
 static void do_like(void);
@@ -114,6 +110,7 @@ static int s_filter = 0;
 static int s_white = 40;                   /* 美白 0-100 */
 static int s_smooth = 40;                  /* 磨皮 0-100 (拍照时) */
 static int s_sticker = -1;                 /* -1 = 无贴纸 */
+static bool s_mirror = true;               /* 自拍默认镜像; 可在工具栏切换 */
 
 /* 当前生效滤镜参数 (基础滤镜 + 美白叠加); hw2d 按参数内容判断 LUT 重建 */
 static hw2d_filter_t s_active_filter;
@@ -130,8 +127,7 @@ static bool s_thumb_dirty = false;
 
 /* 控件 */
 static lv_obj_t *s_status_l, *s_status_c, *s_status_r;   /* 状态栏三区 */
-static lv_obj_t *s_beauty_card;            /* 右上美颜卡 */
-static lv_obj_t *s_card_white, *s_card_smooth;
+static lv_obj_t *s_mirror_label;
 static lv_obj_t *s_panel = NULL;           /* 当前弹出面板 */
 static lv_obj_t *s_toast = NULL;
 static lv_timer_t *s_toast_timer = NULL;
@@ -266,12 +262,14 @@ static void preview_timer_cb(lv_timer_t *t)
         /* rot180: 装配方向补偿 (GC0308 寄存器翻转真机写不进, 软件反向写出) */
         hw2d_yuv_filter_rgb565_rot180_stat(s_canvas_buf, yuyv, UI_W * UI_H,
                                            &s_yuv_luts);
+        if (s_mirror) hw2d_rgb565_hmirror(s_canvas_buf, UI_W, UI_H);
         if (thumb_due) {
             if (s_sticker >= 0 && s_face_rgb) {
                 /* 人脸检测吃 RGB565: 恒等表转换一帧 (每 ~320ms);
                  * 同样 rot180, 人脸框坐标与旋转后的画面/照片一致 */
                 hw2d_yuv_filter_rgb565_rot180(s_face_rgb, yuyv, UI_W * UI_H,
                                               &s_id_luts);
+                if (s_mirror) hw2d_rgb565_hmirror(s_face_rgb, UI_W, UI_H);
                 pvc_face_submit(s_face_rgb);
             }
             s_thumb_dirty = false;
@@ -333,6 +331,7 @@ static void update_thumbs(const uint8_t *src)
                             &s_thumb_luts[i]);
         hw2d_yuv_filter_rgb565_rot180(s_thumb_bufs[i], t, THUMB_SZ * THUMB_SZ,
                                       &s_thumb_luts[i]);
+        if (s_mirror) hw2d_rgb565_hmirror(s_thumb_bufs[i], THUMB_SZ, THUMB_SZ);
         if (s_thumb_canvases[i]) lv_obj_invalidate(s_thumb_canvases[i]);
     }
 }
@@ -426,6 +425,7 @@ typedef struct {
     int           sticker;     /* 贴纸合成进照片 (-1 = 无) */
     pvc_face_box_t fbox;       /* 快门时刻人脸框快照 (无效则固定位) */
     bool          fbox_valid;
+    bool          mirror;      /* 快门时刻自拍方向快照 */
     int           fid;       /* 扩展滤镜索引 (含 CCD) */
     uint32_t      seq;
     int64_t       t_shutter;
@@ -489,6 +489,7 @@ static void photo_worker(void *arg)
         static hw2d_yuv_luts_t s_wk_luts;      /* worker 单任务专用 */
         /* 装配方向补偿: 先转 180 度, 后续人脸框/贴纸坐标即与预览一致 */
         hw2d_yuv_rot180(yuyv, pw * ph);
+        if (job.mirror) hw2d_yuv_hmirror(yuyv, pw, ph);
         hw2d_yuv_blur_y(yuyv, yuyv, pw, ph, (uint8_t)job.smooth);
         int64_t t_blur = esp_timer_get_time();
         if (job.fid >= FILTER_CCD_BASE) {
@@ -640,6 +641,7 @@ static void take_photo(void)
         .smooth = s_smooth,
         .white = s_white,
         .sticker = s_sticker,
+        .mirror = s_mirror,
         .fid = s_filter,
         .seq = s_seq,
         .t_shutter = t0,
@@ -731,7 +733,7 @@ static lv_obj_t *panel_create(uint32_t h)
     s_panel = lv_obj_create(lv_scr_act());
     lv_obj_set_size(s_panel, UI_W, h);
     lv_obj_set_pos(s_panel, 0, UI_H - BAR_H - h);
-    lv_obj_set_style_bg_color(s_panel, lv_color_make(0x1c, 0x22, 0x30), 0);
+    lv_obj_set_style_bg_color(s_panel, lv_color_make(0x17, 0x14, 0x1c), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_90, 0);
     lv_obj_set_style_border_width(s_panel, 0, 0);
     lv_obj_set_style_pad_all(s_panel, 0, 0);
@@ -747,7 +749,7 @@ static void panel_item(lv_obj_t *panel, const char *txt, int thumb_idx,
     lv_obj_t *box = lv_btn_create(panel);
     lv_obj_set_size(box, 48, 46);
     lv_obj_set_pos(box, x, 6);
-    lv_obj_set_style_bg_color(box, lv_color_make(0x2f, 0x36, 0x45), 0);
+    lv_obj_set_style_bg_color(box, lv_color_make(0x2b, 0x25, 0x30), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(box, 8, 0);
     lv_obj_set_style_pad_all(box, 0, 0);
@@ -791,13 +793,6 @@ static void open_filter_panel(void)
         panel_item(p, filter_name(i), i < HW2D_FILTER_MAX ? i : -1,
                    6 + i * 52, on_filter_click, i);
     }
-}
-
-/* 长按左侧滤镜缩略 -> 展开滤镜面板 (设计稿 02, 便于大图预览) */
-static void on_filter_long_press(lv_event_t *e)
-{
-    (void)e;
-    open_filter_panel();
 }
 
 /* ---------- 贴纸面板 ---------- */
@@ -873,14 +868,8 @@ static void open_beauty_panel(void)
     lv_obj_center(dl);
 }
 
-/* 面板"完成" / 美颜卡 / 相册返回 等命名回调 */
+/* 面板"完成" / 相册返回 等命名回调 */
 static void panel_done_cb(lv_event_t *e) { (void)e; close_panel(); }
-
-static void on_beauty_card_click(lv_event_t *e)
-{
-    (void)e;
-    open_beauty_panel();
-}
 
 /* ================= 相册 ================= */
 static lv_obj_t *s_album_panel = NULL;
@@ -1249,21 +1238,7 @@ static const char *filter_name(int f)
 static void update_status(void)
 {
     if (s_status_c) {
-        char s[40];
-        /* 注意: 状态栏文案只能用 ASCII + CJK —— Source Han 16 CJK 字体
-         * cmap 无 Latin-1 补充区 ('·' U+00B7)/省略号/LV_SYMBOL, 会成乱码 */
-        snprintf(s, sizeof(s), "美颜 %s", filter_name(s_filter));
-        lv_label_set_text(s_status_c, s);
-    }
-    if (s_card_white) {
-        char s[16];
-        snprintf(s, sizeof(s), "美白 %d", s_white);
-        lv_label_set_text(s_card_white, s);
-    }
-    if (s_card_smooth) {
-        char s[16];
-        snprintf(s, sizeof(s), "磨皮 %d", s_smooth);
-        lv_label_set_text(s_card_smooth, s);
+        lv_label_set_text(s_status_c, filter_name(s_filter));
     }
 }
 
@@ -1271,24 +1246,35 @@ static void update_status(void)
 /* 工具栏常规按钮统一样式 (深色半透明圆角) */
 static void style_tool_btn(lv_obj_t *btn)
 {
-    lv_obj_set_style_bg_color(btn, lv_color_make(0x14, 0x18, 0x22), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_80, 0);
-    lv_obj_set_style_radius(btn, 14, 0);
-    lv_obj_set_style_border_width(btn, 0, 0);
-    lv_obj_set_style_shadow_width(btn, 1, 0);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_make(0x18, 0x16, 0x1d), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_70, 0);
+    lv_obj_set_style_radius(btn, 16, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_make(0xff, 0xf3, 0xe9), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_set_style_pad_all(btn, 0, 0);
 }
 static void btn_shutter_cb(lv_event_t *e) { (void)e; take_photo(); }
 static void btn_sticker_cb(lv_event_t *e) { (void)e; open_sticker_panel(); }
 static void btn_album_cb(lv_event_t *e)   { (void)e; open_album(); }
+static void btn_filter_cb(lv_event_t *e)  { (void)e; open_filter_panel(); }
+static void btn_beauty_cb(lv_event_t *e)  { (void)e; open_beauty_panel(); }
+static void btn_mirror_cb(lv_event_t *e)
+{
+    (void)e;
+    s_mirror = !s_mirror;
+    if (s_mirror_label) lv_label_set_text(s_mirror_label, s_mirror ? "镜像" : "非镜像");
+    s_thumb_dirty = true;
+    toast_show(s_mirror ? "自拍镜像" : "非镜像");
+}
 static void btn_feed_cb(lv_event_t *e)
 {
     (void)e;
     open_feed();
 }
 
-/* 工程模式 (docs/02 §6): 长按"翻转"键 -> 串口打印 token 前 8 位等调试信息 */
+/* 工程模式 (docs/02 §6): 长按"动态"键 -> 串口打印 token 前 8 位等调试信息 */
 static void btn_flip_long_cb(lv_event_t *e)
 {
     (void)e;
@@ -1306,7 +1292,7 @@ void ui_beauty_camera_create(void)
         return;
     }
     lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_make(0x0a, 0x0d, 0x14), 0);
+    lv_obj_set_style_bg_color(scr, lv_color_make(0x12, 0x0f, 0x16), 0);
 
     hw2d_init();
     update_active_filter();
@@ -1324,8 +1310,8 @@ void ui_beauty_camera_create(void)
     lv_obj_t *status = lv_obj_create(scr);
     lv_obj_set_size(status, UI_W, STATUS_H);
     lv_obj_set_pos(status, 0, 0);
-    lv_obj_set_style_bg_color(status, lv_color_make(0x0a, 0x0d, 0x14), 0);
-    lv_obj_set_style_bg_opa(status, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(status, lv_color_make(0x12, 0x0f, 0x16), 0);
+    lv_obj_set_style_bg_opa(status, LV_OPA_50, 0);
     lv_obj_set_style_border_width(status, 0, 0);
     lv_obj_set_style_pad_all(status, 0, 0);
     lv_obj_set_style_radius(status, 0, 0);
@@ -1333,127 +1319,102 @@ void ui_beauty_camera_create(void)
 
     s_status_l = lv_label_create(status);
     lv_label_set_text(s_status_l, "--:--");
-    lv_obj_set_pos(s_status_l, 8, 3);
-    lv_obj_set_style_text_color(s_status_l, lv_color_white(), 0);
+    lv_obj_set_pos(s_status_l, 10, 4);
+    lv_obj_set_style_text_color(s_status_l, lv_color_make(0xff, 0xf3, 0xe9), 0);
 
     s_status_c = lv_label_create(status);
-    lv_obj_align(s_status_c, LV_ALIGN_TOP_MID, 0, 3);
-    lv_obj_set_style_text_color(s_status_c, lv_color_white(), 0);
+    lv_obj_align(s_status_c, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_style_text_color(s_status_c, lv_color_make(0xff, 0xf3, 0xe9), 0);
 
     s_status_r = lv_label_create(status);
     lv_label_set_text(s_status_r, "100%");
-    lv_obj_set_pos(s_status_r, UI_W - 34, 3);
-    lv_obj_set_style_text_color(s_status_r, lv_color_white(), 0);
+    lv_obj_set_pos(s_status_r, UI_W - 42, 4);
+    lv_obj_set_style_text_color(s_status_r, lv_color_make(0xf4, 0x8c, 0x7f), 0);
 
-    /* ---------- 左侧滤镜条 (6 个 22x22 缩略) ---------- */
+    /* 滤镜缩略图只在弹出面板显示; 不常驻遮挡低分辨率取景画面。 */
     s_thumb_raw = PSRAM_MALLOC(THUMB_SZ * THUMB_SZ * 2);
     for (int i = 0; i < HW2D_FILTER_MAX; i++) {
         s_thumb_bufs[i] = PSRAM_MALLOC(THUMB_SZ * THUMB_SZ * 2);
     }
-    if (s_thumb_raw && s_thumb_bufs[0]) {
-        for (int i = 0; i < HW2D_FILTER_MAX; i++) {
-            lv_obj_t *box = lv_btn_create(scr);
-            lv_obj_set_size(box, 30, 26);
-            lv_obj_set_pos(box, SIDEBAR_X, SIDEBAR_Y + i * 30);
-            lv_obj_set_style_bg_color(box, lv_color_make(0x14, 0x18, 0x22), 0);
-            lv_obj_set_style_bg_opa(box, LV_OPA_70, 0);
-            lv_obj_set_style_radius(box, 6, 0);
-            lv_obj_set_style_pad_all(box, 0, 0);
-            lv_obj_set_style_shadow_width(box, 0, 0);
-            lv_obj_set_style_border_width(box, 0, 0);
-            lv_obj_add_event_cb(box, on_filter_click, LV_EVENT_CLICKED,
-                                (void *)(intptr_t)i);
-            /* 长按 -> 展开滤镜面板 */
-            lv_obj_add_event_cb(box, on_filter_long_press, LV_EVENT_LONG_PRESSED, NULL);
-
-            s_thumb_canvases[i] = lv_canvas_create(box);
-            lv_canvas_set_buffer(s_thumb_canvases[i], s_thumb_bufs[i],
-                                 THUMB_SZ, THUMB_SZ, LV_COLOR_FORMAT_RGB565);
-            lv_obj_set_pos(s_thumb_canvases[i], 4, 2);
-            lv_obj_set_style_bg_opa(s_thumb_canvases[i], LV_OPA_TRANSP, 0);
-        }
-    }
-
-    /* ---------- 右上美颜卡 ---------- */
-    s_beauty_card = lv_obj_create(scr);
-    lv_obj_set_size(s_beauty_card, 64, 40);
-    lv_obj_set_pos(s_beauty_card, UI_W - 68, STATUS_H + 4);
-    lv_obj_set_style_bg_color(s_beauty_card, lv_color_make(0x14, 0x18, 0x22), 0);
-    lv_obj_set_style_bg_opa(s_beauty_card, LV_OPA_70, 0);
-    lv_obj_set_style_radius(s_beauty_card, 8, 0);
-    lv_obj_set_style_border_width(s_beauty_card, 0, 0);
-    lv_obj_set_style_shadow_width(s_beauty_card, 0, 0);
-    lv_obj_add_event_cb(s_beauty_card, on_beauty_card_click, LV_EVENT_CLICKED, NULL);
-
-    s_card_white = lv_label_create(s_beauty_card);
-    lv_obj_set_pos(s_card_white, 8, 4);
-    lv_obj_set_style_text_color(s_card_white, lv_color_white(), 0);
-
-
-    s_card_smooth = lv_label_create(s_beauty_card);
-    lv_obj_set_pos(s_card_smooth, 8, 22);
-    lv_obj_set_style_text_color(s_card_smooth, lv_color_white(), 0);
-
 
     /* ---------- 底部工具栏 ---------- */
     lv_obj_t *bar = lv_obj_create(scr);
     lv_obj_set_size(bar, UI_W, BAR_H);
     lv_obj_set_pos(bar, 0, UI_H - BAR_H);
-    lv_obj_set_style_bg_color(bar, lv_color_make(0x0a, 0x0d, 0x14), 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_make(0x12, 0x10, 0x16), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_60, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_set_style_shadow_width(bar, 0, 0);
 
-    const int by = 6;
-    /* 相册 */
-    lv_obj_t *b_album = lv_btn_create(bar);
-    lv_obj_set_size(b_album, 52, 28);
-    lv_obj_set_pos(b_album, 12, by);
-    style_tool_btn(b_album);
-    lv_obj_add_event_cb(b_album, btn_album_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *b_album_l = lv_label_create(b_album);
-    lv_label_set_text(b_album_l, "相册");
-    lv_obj_set_style_text_color(b_album_l, lv_color_white(), 0);
-    lv_obj_center(b_album_l);
+    const int by = 10;
+    /* 滤镜: 长按进入贴纸 */
+    lv_obj_t *b_filter = lv_btn_create(bar);
+    lv_obj_set_size(b_filter, 52, 32);
+    lv_obj_set_pos(b_filter, 8, by);
+    style_tool_btn(b_filter);
+    lv_obj_add_event_cb(b_filter, btn_filter_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(b_filter, btn_sticker_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_t *b_filter_l = lv_label_create(b_filter);
+    lv_label_set_text(b_filter_l, "滤镜");
+    lv_obj_set_style_text_color(b_filter_l, lv_color_make(0xff, 0xf3, 0xe9), 0);
+    lv_obj_center(b_filter_l);
 
-    /* 快门 (大圆) */
+    /* 美颜 */
+    lv_obj_t *b_beauty = lv_btn_create(bar);
+    lv_obj_set_size(b_beauty, 52, 32);
+    lv_obj_set_pos(b_beauty, 70, by);
+    style_tool_btn(b_beauty);
+    lv_obj_add_event_cb(b_beauty, btn_beauty_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *b_beauty_l = lv_label_create(b_beauty);
+    lv_label_set_text(b_beauty_l, "美颜");
+    lv_obj_set_style_text_color(b_beauty_l, lv_color_make(0xff, 0xf3, 0xe9), 0);
+    lv_obj_center(b_beauty_l);
+
+    /* 快门: 奶油外圈 + 珊瑚内芯; 长按进入相册 */
     lv_obj_t *b_shutter = lv_btn_create(bar);
-    lv_obj_set_size(b_shutter, 44, 36);
-    lv_obj_set_pos(b_shutter, 138, 2);
-    lv_obj_set_style_bg_color(b_shutter, lv_color_make(0xe8, 0x4a, 0x4a), 0);
-    lv_obj_set_style_radius(b_shutter, 22, 0);
+    lv_obj_set_size(b_shutter, 52, 52);
+    lv_obj_set_pos(b_shutter, 134, 0);
+    lv_obj_set_style_bg_color(b_shutter, lv_color_make(0xff, 0xf3, 0xe9), 0);
+    lv_obj_set_style_radius(b_shutter, 26, 0);
     lv_obj_set_style_border_width(b_shutter, 0, 0);
     lv_obj_set_style_shadow_width(b_shutter, 0, 0);
+    lv_obj_set_style_pad_all(b_shutter, 0, 0);
     lv_obj_add_event_cb(b_shutter, btn_shutter_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *b_shutter_l = lv_label_create(b_shutter);
-    lv_label_set_text(b_shutter_l, "拍");
-    lv_obj_set_style_text_color(b_shutter_l, lv_color_white(), 0);
-    lv_obj_center(b_shutter_l);
+    lv_obj_add_event_cb(b_shutter, btn_album_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_t *shutter_inner = lv_obj_create(b_shutter);
+    lv_obj_set_size(shutter_inner, 38, 38);
+    lv_obj_center(shutter_inner);
+    lv_obj_set_style_bg_color(shutter_inner, lv_color_make(0xf4, 0x8c, 0x7f), 0);
+    lv_obj_set_style_bg_opa(shutter_inner, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(shutter_inner, 19, 0);
+    lv_obj_set_style_border_width(shutter_inner, 0, 0);
+    lv_obj_set_style_pad_all(shutter_inner, 0, 0);
+    lv_obj_remove_flag(shutter_inner, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 贴纸 */
-    lv_obj_t *b_sticker = lv_btn_create(bar);
-    lv_obj_set_size(b_sticker, 52, 28);
-    lv_obj_set_pos(b_sticker, 206, by);
-    style_tool_btn(b_sticker);
-    lv_obj_add_event_cb(b_sticker, btn_sticker_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *b_sticker_l = lv_label_create(b_sticker);
-    lv_label_set_text(b_sticker_l, "贴纸");
-    lv_obj_set_style_text_color(b_sticker_l, lv_color_white(), 0);
-    lv_obj_center(b_sticker_l);
+    /* 自拍方向 */
+    lv_obj_t *b_mirror = lv_btn_create(bar);
+    lv_obj_set_size(b_mirror, 52, 32);
+    lv_obj_set_pos(b_mirror, 198, by);
+    style_tool_btn(b_mirror);
+    lv_obj_add_event_cb(b_mirror, btn_mirror_cb, LV_EVENT_CLICKED, NULL);
+    s_mirror_label = lv_label_create(b_mirror);
+    lv_label_set_text(s_mirror_label, "镜像");
+    lv_obj_set_style_text_color(s_mirror_label, lv_color_make(0xff, 0xf3, 0xe9), 0);
+    lv_obj_center(s_mirror_label);
 
-    /* 好友 (feed, §3); 长按 = 工程模式 */
-    lv_obj_t *b_flip = lv_btn_create(bar);
-    lv_obj_set_size(b_flip, 52, 28);
-    lv_obj_set_pos(b_flip, 262, by);
-    style_tool_btn(b_flip);
-    lv_obj_add_event_cb(b_flip, btn_feed_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(b_flip, btn_flip_long_cb, LV_EVENT_LONG_PRESSED, NULL);
-    lv_obj_t *b_flip_l = lv_label_create(b_flip);
-    lv_label_set_text(b_flip_l, "好友");
-    lv_obj_set_style_text_color(b_flip_l, lv_color_white(), 0);
-    lv_obj_center(b_flip_l);
+    /* 动态 (feed, §3); 长按 = 工程模式 */
+    lv_obj_t *b_feed = lv_btn_create(bar);
+    lv_obj_set_size(b_feed, 52, 32);
+    lv_obj_set_pos(b_feed, 260, by);
+    style_tool_btn(b_feed);
+    lv_obj_add_event_cb(b_feed, btn_feed_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(b_feed, btn_flip_long_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_t *b_feed_l = lv_label_create(b_feed);
+    lv_label_set_text(b_feed_l, "动态");
+    lv_obj_set_style_text_color(b_feed_l, lv_color_make(0xff, 0xf3, 0xe9), 0);
+    lv_obj_center(b_feed_l);
 
     /* ---------- 相册界面 (常驻, 默认隐藏) ---------- */
     s_album_panel = lv_obj_create(scr);

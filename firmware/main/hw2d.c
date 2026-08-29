@@ -504,6 +504,39 @@ void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix)
     }
 }
 
+void hw2d_rgb565_hmirror(uint16_t *rgb, uint32_t w, uint32_t h)
+{
+    if (!rgb || w < 2 || h == 0) return;
+    for (uint32_t y = 0; y < h; y++) {
+        uint16_t *row = rgb + (size_t)y * w;
+        for (uint32_t x = 0; x < w / 2; x++) {
+            uint16_t t = row[x];
+            row[x] = row[w - 1 - x];
+            row[w - 1 - x] = t;
+        }
+    }
+}
+
+void hw2d_yuv_hmirror(uint8_t *yuyv, uint32_t w, uint32_t h)
+{
+    if (!yuyv || w < 2 || (w & 1u) || h == 0) return;
+    uint32_t nmp = w / 2;                 /* 每宏像素 = Y0 Cb Y1 Cr */
+    for (uint32_t y = 0; y < h; y++) {
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        for (uint32_t i = 0; i < nmp / 2; i++) {
+            uint8_t *a = row + (size_t)i * 4;
+            uint8_t *b = row + (size_t)(nmp - 1 - i) * 4;
+            uint8_t a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+            a[0] = b[2]; a[1] = b[1]; a[2] = b[0]; a[3] = b[3];
+            b[0] = a2;   b[1] = a1;   b[2] = a0;   b[3] = a3;
+        }
+        if (nmp & 1u) {
+            uint8_t *m = row + (size_t)(nmp / 2) * 4;
+            uint8_t t = m[0]; m[0] = m[2]; m[2] = t;
+        }
+    }
+}
+
 void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,
                      uint8_t strength)
 {
