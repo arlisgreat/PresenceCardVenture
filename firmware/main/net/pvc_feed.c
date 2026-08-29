@@ -158,7 +158,9 @@ static void feed_restore_impl(void)
             continue;
         }
         fclose(f);
-        if (!pvc_jpeg_intact(buf, (size_t)sz)) {
+        uint32_t rw = 0, rh = 0;
+        if (!pvc_jpeg_intact(buf, (size_t)sz) ||
+            !pvc_jpeg_dims(buf, (size_t)sz, &rw, &rh) || rw != 320 || rh != 240) {
             /* 崩溃/掉电打断 fwrite 的残缺缓存: 解码出绿色块 (真机实证)。
              * 删除后本条不入槽 -> 下轮 feed 轮询重新下载 */
             heap_caps_free(buf);
@@ -321,6 +323,18 @@ int pvc_feed_poll(void)
             if (!buf) continue;
             int len = fetch_image(s->meta.photo_id, buf, JPEG_CAP);
             if (len <= 0) { heap_caps_free(buf); continue; }
+            /* 入槽门禁: 完整 + 确为 QVGA。server 曾下发 1x1 占位图谎称
+             * 320x240 (demo-store), 入槽后显示层才拒绝 -> 提前挡住 */
+            uint32_t iw = 0, ih = 0;
+            if (!pvc_jpeg_intact(buf, (size_t)len) ||
+                !pvc_jpeg_dims(buf, (size_t)len, &iw, &ih) ||
+                iw != 320 || ih != 240) {
+                PVC_EV("feed_img_drop id=%s len=%d dims=%lux%lu",
+                       s->meta.photo_id, len,
+                       (unsigned long)iw, (unsigned long)ih);
+                heap_caps_free(buf);
+                continue;
+            }
             /* 收缩到实际大小 */
             uint8_t *tight = PSRAM_MALLOC((size_t)len);
             if (tight) {
