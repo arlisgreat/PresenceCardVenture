@@ -229,8 +229,18 @@ def run_checks(ev, http, sleeps, boots, panics):
             r.add("C11", "FAIL",
                   f"最低堆水位 {min_heap}B < 20KB (TLS 握手将失败)")
         elif drop > 20 * 1024:
-            r.add("C11", "WARN",
-                  f"堆前后半程均值下降 {int(drop)}B, 疑似泄漏 (min={min_heap}B)")
+            # 区分 "缓存台阶" (feed 拉新照片一次性入 PSRAM 后平稳) 与
+            # "持续下坡" (真泄漏): 末 1/3 段仍在下降才算疑似泄漏
+            tail = heaps[-max(3, len(heaps) // 3):]
+            tail_drop = tail[0] - tail[-1]
+            if tail_drop <= 2 * 1024:
+                r.add("C11", "INFO",
+                      f"堆一次性下降 {int(drop)}B 后平稳 (缓存增长, 如 feed "
+                      f"拉新图; 末段仅降 {tail_drop}B, min={min_heap}B)")
+            else:
+                r.add("C11", "WARN",
+                      f"堆持续下降 (总降 {int(drop)}B, 末段仍降 {tail_drop}B), "
+                      f"疑似泄漏 (min={min_heap}B)")
         else:
             r.add("C11", "PASS",
                   f"堆稳定: 均值 {int(statistics.mean(heaps))}B, 最低 {min_heap}B")
