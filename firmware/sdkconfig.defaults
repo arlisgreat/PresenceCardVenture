@@ -20,8 +20,9 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_32KB=y
 
 # --- 中文字体 (P0: 默认 Montserrat 无 CJK 字形, 中文会渲染为方块) ---
-CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y
-CONFIG_LV_FONT_DEFAULT_SOURCE_HAN_SANS_SC_16_CJK=y
+# 中文用自制 Noto Sans SC 16 (main/pvc_font_cn16.c, tools/make_cn_font.sh):
+# 内置 Source Han 16 CJK 仅 1187 字稀疏子集, UI 用字缺 59 个成乱码, 已弃用
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 
 # --- LVGL 全尺寸缓冲(320x240x2B)放 PSRAM ---

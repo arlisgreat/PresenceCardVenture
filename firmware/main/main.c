@@ -119,6 +119,15 @@ void app_main(void)
      * (esp_lvgl_port 走 ILI9342 MADCTL 硬件翻转, 触摸坐标 LVGL9 自动跟随) */
     if (bsp_display_lock(1000)) {
         lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
+        /* 默认字体换自制 Noto Sans SC 16 (tools/make_cn_font.sh):
+         * 内置 Source Han 16 CJK 是 1187 字稀疏子集, 拍/照/图/黑/脸/镜
+         * 等 59 个 UI 用字全缺 -> 乱码。自制字体 = 旧子集全集 + 全部
+         * UI 用字 + CJK 标点 (1423 字形, 不回退任何覆盖) */
+        LV_FONT_DECLARE(pvc_font_cn16);
+        lv_theme_t *th = lv_theme_default_init(
+            disp, lv_palette_main(LV_PALETTE_BLUE),
+            lv_palette_main(LV_PALETTE_RED), true, &pvc_font_cn16);
+        lv_display_set_theme(disp, th);
         bsp_display_unlock();
     }
     if (!quiet) bsp_display_backlight_on();

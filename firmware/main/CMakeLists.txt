@@ -47,6 +47,7 @@ foreach(pvc_l3d f100 z30 a620 m532)
 endforeach()
 
 idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
+                            "pvc_font_cn16.c"
                             "ui_beauty_camera.c" "pvc_power.c" "pvc_clock.c"
                             "pvc_jpeg.c" "pvc_jpeg_dims.c" "pvc_sound.c" "pvc_algo_test.c" "pvc_face.cpp"
                             "net/pvc_net.c" "net/pvc_store.c" "net/pvc_http.c"
