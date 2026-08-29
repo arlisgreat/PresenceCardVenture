@@ -34,6 +34,7 @@
 | 413 | `PHOTO_TOO_LARGE` | 超过 1MB → 固件检查相机 JPEG 参数 |
 | 415 | `BAD_CONTENT_TYPE` | 非 JPEG |
 | 429 | `RATE_LIMITED` | 响应含 `retry_after`（秒）→ 严格按此退避 |
+| 503 | `STORAGE_UNAVAILABLE` | 图片存储暂不可用；照片未发布，稍后按同一幂等键重试 |
 | 500 | `SERVER_ERROR` | 指数退避重试（1s → 4s → 15s，至多 3 次） |
 
 ---
@@ -69,10 +70,11 @@ sequenceDiagram
 ```
 - `device_id`：设备唯一 id，出厂烧录或由 MAC 派生（如 `dvc_` + mac hex），**同一设备终身不变**。
 
-响应 `200`：
+响应 `200`（每次领取生成未使用的随机 6 位数字码；示例值仅作格式说明）：
 ```json
 { "pair_code": "482913", "expires_in": 600 }
 ```
+重复领取只更新配对码及过期时间，已绑定关系、设备 token 和玩法配置继续保留。
 
 ### 1.2 轮询配对状态
 
@@ -90,6 +92,24 @@ sequenceDiagram
 - 过期：`410` `{ "error": { "code": "PAIR_EXPIRED" } }` → 重新走 1.1。
 
 > **固件要求**：`device_token` 写入 NVS；此后每次启动读取。收到任一接口 `401 TOKEN_INVALID` 时清除 token 并回到配对流程。
+
+### 1.3 Web 绑定设备
+
+`POST /pair/bind` —— **需要用户登录 token**
+
+Web 用户在设备实验室输入设备屏幕上的配对码后调用：
+
+```json
+{ "device_id": "dvc_a1b2c3d4e5f6", "pair_code": "482913" }
+```
+
+响应 `200`：
+
+```json
+{ "status": "bound", "device_id": "dvc_a1b2c3d4e5f6", "user": { "username": "ayan", "display_name": "阿岩" } }
+```
+
+配对码过期或不匹配返回 `410 PAIR_EXPIRED`。绑定成功后，设备继续轮询 `GET /pair/status`，取得写入 NVS 的 `device_token`。
 
 ---
 
@@ -115,6 +135,8 @@ sequenceDiagram
 | `Content-Type` | ✅ | `image/jpeg` |
 | `Content-Length` | ✅ | 用定长，**不要 chunked**（嵌入式兼容性） |
 | `Idempotency-Key` | ✅ | `"{device_id}-{boot计数}-{照片序号}"`，同一张照片重试必须同键 |
+| `X-Device-ID` | ✅ | 必须与配对时的 `device_id` 一致，防止设备 token 跨设备复用 |
+| `X-Circle` | 否 | URL-encode 的 UTF-8 圈子名，默认 `小圈`，最长 32 字符 |
 | `X-Filter-Id` | ✅ | 滤镜 id，无滤镜传 `none`（见 §5 滤镜清单） |
 | `X-Caption` | 否 | ≤140 字符，URL-encode 后的 UTF-8 |
 | `X-Width` / `X-Height` | ✅ | 如 `320` / `240` |
@@ -133,6 +155,7 @@ sequenceDiagram
 
 > **幂等语义**：服务器对 `(device_id, Idempotency-Key)` 去重。同键重试返回 `200` + 首次的响应体（不是 201），照片只存一份。断网重传、用户连按，都不会产生重复照片。
 > **限额**：60 张/天/设备，超出 `429` + `retry_after`。
+> **元数据校验**：`X-Caption` 必须是 URL-encode 的 UTF-8 且不超过 140 字符；`X-Width`/`X-Height` 为 1–8192 的整数；非法值返回 `400 BAD_REQUEST`，不会写入文件。
 
 ---
 
@@ -148,17 +171,40 @@ sequenceDiagram
   "unseen_count": 3,
   "pending_friend_requests": 1,
   "server_time": "2026-08-26T09:31:02Z",
-  "fw_latest": { "version": "0.1.2", "url": "https://.../fw_0.1.2.bin", "md5": "..." }
+  "fw_latest": { "version": "0.1.2", "url": "https://.../fw_0.1.2.bin", "md5": "..." },
+  "pending_config": null,
+  "active_config": null
 }
 ```
 - `unseen_count > 0` 才去拉 feed，省电省流量；`= 0` 直接回去睡觉。
 - `fw_latest` 为 OTA 预留，MVP 可忽略。
+- `pending_config` 是 Web 下发且尚未回执的玩法配置；设备应用后在 `POST /device/ack` body 中带上 `config_id`。
+- `active_config` 是设备最近一次成功回执的玩法配置；设备重新上线或 Web 重新绑定时可据此恢复当前显示，不会因清空 `pending_config` 而丢失。
+- 设备 token 读取状态时，`unseen_count` 和 `pending_friend_requests` 均按该设备绑定的账号与可见关系计算，不返回全局数据。
+
+### Web 下发玩法配置
+
+设备主人在 Web 端调用 `POST /device/config`，服务端只接受已绑定设备主人提交的配置。设备下一次读取 `/device/state` 即可取得 `pending_config`，成功应用后通过 ack 清除并转为 `active_config`。
+
+请求可带 `Idempotency-Key`；同一设备使用相同 key 重试时返回 `200` 和第一次的 `config_id`，不会重复排队。
+
+```json
+{
+  "device_id": "dvc_a1b2c3d4e5f6",
+  "filter_id": "film",
+  "play_type": "ccd",
+  "beauty": 28,
+  "sticker": "star"
+}
+```
+
+响应为 `202 { config_id, status: "queued", device_id, config }`。同一设备的新配置会覆盖尚未回执的旧配置，避免设备重启后重复应用。
 
 ### 3.2 Feed
 
 `GET /feed?limit=8&cursor=<可选>`
 
-请求头建议带 `If-None-Match: <上次的 etag>`；无更新返回 `304`（无 body）。
+请求头建议带 `If-None-Match: <上次的 etag>`；服务端同时在 JSON 和 HTTP `ETag` 响应头返回 etag，无更新返回带同一 `ETag` 的 `304`（无 body）。
 
 响应 `200`：
 ```json
@@ -188,7 +234,11 @@ sequenceDiagram
 
 `GET /photos/{photo_id}/image`（`?size=320` 预留，MVP 只有一档）
 
-- 响应：`200`，`Content-Type: image/jpeg`，`Cache-Control: public, max-age=31536000, immutable`
+- 必须携带有效的 `Authorization: Bearer <device_token>`（Web 端使用用户登录 token）。
+- 服务端会再次校验照片是否属于自己或已授权好友；未授权返回 `403 FORBIDDEN`，不依赖客户端隐藏 URL。
+
+- 响应：`200`，`Content-Type: image/jpeg`，`Cache-Control: private, max-age=31536000, immutable`
+- 对象存储读取失败返回 `503 STORAGE_UNAVAILABLE`；设备按通用退避策略重试，不把失败响应写入图片缓存。
 - 下载到 PSRAM → JPEG 解码 RGB565（推荐 TJpg_Decoder）→ 刷屏。
 - 建议在 flash 缓存最近 8 张好友照片（文件名 = photo_id），**离线也能翻看**。
 
@@ -202,7 +252,11 @@ sequenceDiagram
 取消：`DELETE /photos/{photo_id}/reactions/heart` → `204`。
 `type` 枚举：`heart | thumbsup | wow`（固件按键映射建议：❤️）。
 
-### 3.5 我的历史（可选）
+### 3.5 回执轻信号
+
+`POST /device/ack` —— 需要 `Authorization: Bearer <device_token>`，设备完成动态展示或反应处理后调用，成功返回 `204`。未携带有效 token 返回 `401 TOKEN_INVALID`。
+
+### 3.6 我的历史（可选）
 
 `GET /photos/mine?cursor=` —— 结构同 feed，用于设备翻自己拍过的照片。
 
@@ -217,6 +271,38 @@ sequenceDiagram
 | `POST /device/heartbeat` | 可选调试：`{battery, rssi, fw_version, free_heap}`，联调期建议每唤醒一次上报 |
 
 好友请求的发起/接受在 **web 端**完成（输入对方 6 位 friend_code），设备端通过 `/device/state` 的 `pending_friend_requests` 感知。
+
+---
+
+## 4.1 账号体系（Web 端，2026-08 新增）
+
+| 端点 | 说明 |
+|------|------|
+| `POST /auth/register` | `{username, password, display_name?, invite_code?}` → `201 {token, expires_in: 259200, user}`。username 为 2-24 位字母/数字/下划线；password 6-128 位；带 6 位 `invite_code` 时注册即与对方互为好友。`409 ALREADY_EXISTS` 用户名被占用；`404 NOT_FOUND` 好友码不存在 |
+| `POST /auth/login` | `{username, password}` → `200 {token, expires_in, user}`；失败 `401 AUTH_FAILED` |
+| `POST /auth/logout` | 吊销当前 session token，`204` |
+
+- token 形如 `sess_<32hex>`，72h 有效；所有受保护端点继续用 `Authorization: Bearer <token>`。
+- demo 账号 `ayan / momo / luna` 密码均为 `demo1234`；旧 demo token（`demo-token` 等）继续可用。
+- 密码存储：scrypt（64 字节，16 字节随机 salt），比较用 constant-time。
+
+## 4.2 圈子（小圈 + 大圈订阅，2026-08 新增）
+
+圈子分两类：`small`（小圈，好友圈，无需加入）与 `big`（大圈，订阅门控的兴趣圈）。大圈照片**只认订阅，不认好友关系**——作者不是你的好友也能看到，前提是你订阅了对应大圈。
+
+| 端点 | 说明 |
+|------|------|
+| `GET /circles` | `{items: [{id, name, type, joined, photo_count, subscriber_count}]}`。首项固定为虚拟小圈 `c_small`（无 circleId 的好友照片集合） |
+| `POST /circles` | `{name}`（1-32 字符）→ `201`。创建大圈并自动加入；重名 `409 ALREADY_EXISTS` |
+| `POST /circles/{id}/join` | 订阅大圈，`200` 返回更新后的 circle 对象 |
+| `POST /circles/{id}/leave` | 退订，`204` |
+| `GET /circles/{id}/feed?limit=` | 圈内照片流。未订阅大圈 `403 FORBIDDEN`，不存在 `404`；`c_small` 返回无 `circleId` 的好友照片 |
+
+发帖到大圈：上传照片时带请求头 `X-Circle-Id: <circle_id>`。`c_small` 或不带 = 小圈；其他 id 必须已订阅，否则 `403` / 圈子不存在 `404`。feed item 增加 `circle_id` 字段（小圈照片为 `null`）。
+
+Feed 过滤与设备混流：
+- `GET /feed?circle_id=<id>`：服务端按圈过滤；`circle_id=c_small` 只返回小圈（无 `circleId`）照片。
+- 设备 token 或 `?mode=device` 走混流语义：好友照片按时间倒序；好友 24h 无更新时，混入已订阅大圈的精选照片（上限 10 张，排除本人与好友作品）。
 
 ---
 

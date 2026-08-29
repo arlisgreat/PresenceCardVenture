@@ -5,7 +5,13 @@
 }
 
 {$APP_DOMAIN} {
-	root * /srv/web
 	encode zstd gzip
-	file_server
+	handle /v1/* {
+		reverse_proxy api:3000
+	}
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
 }

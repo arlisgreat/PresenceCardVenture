@@ -1,0 +1,349 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { buildApp } from '../src/app.js'
+
+const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+
+test('uploads jpeg, supports idempotent retry, and serves image', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos' })
+  const headers = {
+    authorization: 'Bearer demo-token',
+    'content-type': 'image/jpeg',
+    'idempotency-key': 'device-1-1',
+    'x-filter-id': 'warm',
+    'x-play-type': 'template',
+    'x-beauty': '42',
+    'x-sticker': 'star',
+    'x-circle': encodeURIComponent('傍晚的天空'),
+    'x-width': '320',
+    'x-height': '240',
+  }
+  const first = await app.inject({ method: 'POST', url: '/v1/photos', headers, payload: jpeg })
+  assert.equal(first.statusCode, 201)
+  const retry = await app.inject({ method: 'POST', url: '/v1/photos', headers, payload: jpeg })
+  assert.equal(retry.statusCode, 200)
+  assert.equal(retry.json().photo_id, first.json().photo_id)
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${first.json().photo_id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 200)
+  assert.equal(image.headers['content-type'], 'image/jpeg')
+  const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: { authorization: 'Bearer demo-token' } })
+  const uploaded = feed.json().items.find((item: any) => item.photo_id === first.json().photo_id)
+  assert.equal(uploaded.play_type, 'template')
+  assert.equal(uploaded.beauty, 42)
+  assert.equal(uploaded.sticker, 'star')
+  assert.equal(uploaded.circle, '傍晚的天空')
+  await app.close()
+})
+
+test('clamps feed limits and rejects malformed values', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-limit' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const bounded = await app.inject({ method: 'GET', url: '/v1/feed?limit=999', headers })
+  assert.equal(bounded.statusCode, 200)
+  assert.ok(bounded.json().items.length <= 32)
+  const malformed = await app.inject({ method: 'GET', url: '/v1/feed?limit=wat', headers })
+  assert.equal(malformed.statusCode, 400)
+  assert.equal(malformed.json().error.code, 'BAD_REQUEST')
+  await app.close()
+})
+
+test('returns the feed etag as an HTTP header and honors 304 requests', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-etag' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const first = await app.inject({ method: 'GET', url: '/v1/feed?limit=8', headers })
+  assert.equal(first.statusCode, 200)
+  assert.equal(first.headers.etag, first.json().etag)
+  const cached = await app.inject({ method: 'GET', url: '/v1/feed?limit=8', headers: { ...headers, 'if-none-match': first.headers.etag } })
+  assert.equal(cached.statusCode, 304)
+  assert.equal(cached.headers.etag, first.headers.etag)
+  await app.close()
+})
+
+test('rejects oversized and non-jpeg uploads', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-2' })
+  const base = { authorization: 'Bearer demo-token', 'idempotency-key': 'k', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }
+  const badType = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'content-type': 'application/octet-stream' }, payload: jpeg })
+  assert.equal(badType.statusCode, 415)
+  const tooLarge = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'content-type': 'image/jpeg' }, payload: Buffer.alloc(1024 * 1024 + 1) })
+  assert.equal(tooLarge.statusCode, 413)
+  await app.close()
+})
+
+test('validates photo metadata without turning malformed headers into server errors', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata' })
+  const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '320', 'x-height': '240' }
+  const malformedCaption = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'metadata-1', 'x-caption': '%E0%A4%A' }, payload: jpeg })
+  assert.equal(malformedCaption.statusCode, 400)
+  assert.equal(malformedCaption.json().error.code, 'BAD_REQUEST')
+
+  const longCaption = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'metadata-2', 'x-caption': encodeURIComponent('a'.repeat(141)) }, payload: jpeg })
+  assert.equal(longCaption.statusCode, 400)
+
+  const invalidDimensions = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'metadata-3', 'x-width': '0' }, payload: jpeg })
+  assert.equal(invalidDimensions.statusCode, 400)
+  await app.close()
+})
+
+test('routes photo persistence through an injectable storage adapter', async () => {
+  const calls: string[] = []
+  const storedImage = Buffer.from([0xff, 0xd8, 0x42, 0xff, 0xd9])
+  const storage = {
+    async save(photo: { id: string }) { calls.push(`save:${photo.id}`) },
+    async read(photo: { id: string }) { calls.push(`read:${photo.id}`); return storedImage },
+    async remove(photo: { id: string }) { calls.push(`remove:${photo.id}`) },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-adapter', photoStorage: storage })
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'adapter-1' },
+    payload: jpeg,
+  })
+  assert.equal(created.statusCode, 201)
+  const id = created.json().photo_id
+  assert.deepEqual(calls, [`save:${id}`])
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 200)
+  assert.deepEqual(image.rawPayload, storedImage)
+  assert.deepEqual(calls, [`save:${id}`, `read:${id}`])
+  const removed = await app.inject({ method: 'DELETE', url: `/v1/photos/${id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(removed.statusCode, 204)
+  assert.deepEqual(calls, [`save:${id}`, `read:${id}`, `remove:${id}`])
+  await app.close()
+})
+
+test('does not publish metadata when photo storage fails', async () => {
+  const storage = {
+    async save() { throw new Error('disk unavailable') },
+    async remove() {},
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-storage-failure', photoStorage: storage })
+  const before = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  const failed = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'storage-failure-1' },
+    payload: jpeg,
+  })
+  assert.equal(failed.statusCode, 503)
+  assert.equal(failed.json().error.code, 'STORAGE_UNAVAILABLE')
+  const after = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(after.json().items.length, before.json().items.length)
+  await app.close()
+})
+
+test('reports read failures without leaking internal storage errors', async () => {
+  const storage = {
+    async save() {},
+    async read() { throw new Error('object store timeout') },
+    async remove() {},
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-read-failure', photoStorage: storage })
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'read-failure-1' },
+    payload: jpeg,
+  })
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${created.json().photo_id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 503)
+  assert.equal(image.json().error.code, 'STORAGE_UNAVAILABLE')
+  await app.close()
+})
+
+test('keeps photo metadata when storage deletion fails', async () => {
+  const storage = {
+    async save() {},
+    async read() { return jpeg },
+    async remove() { throw new Error('object store timeout') },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-delete-failure', photoStorage: storage })
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/photos',
+    headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'delete-failure-1' },
+    payload: jpeg,
+  })
+  const id = created.json().photo_id
+  const removed = await app.inject({ method: 'DELETE', url: `/v1/photos/${id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(removed.statusCode, 503)
+  assert.equal(removed.json().error.code, 'STORAGE_UNAVAILABLE')
+  const mine = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  assert.ok(mine.json().items.some((item: any) => item.photo_id === id))
+  await app.close()
+})
+
+test('enforces the per-device daily upload limit', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-limit', uploadDailyLimit: 1 })
+  const base = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }
+  const first = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'limit-1' }, payload: jpeg })
+  assert.equal(first.statusCode, 201)
+  const limited = await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...base, 'idempotency-key': 'limit-2' }, payload: jpeg })
+  assert.equal(limited.statusCode, 429)
+  assert.equal(limited.json().error.code, 'RATE_LIMITED')
+  assert.ok(limited.json().retry_after > 0)
+  await app.close()
+})
+
+test('only owner can delete photos', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photos-3' })
+  const headers = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'delete-k', 'x-filter-id': 'none', 'x-width': '1', 'x-height': '1' }
+  const created = await app.inject({ method: 'POST', url: '/v1/photos', headers, payload: jpeg })
+  const other = await app.inject({ method: 'DELETE', url: `/v1/photos/${created.json().photo_id}`, headers: { authorization: 'Bearer demo-user-2' } })
+  assert.equal(other.statusCode, 403)
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${created.json().photo_id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 204)
+  await app.close()
+})
+
+test('photo downloads require authentication and an authorized relationship', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-visibility' })
+  const feed = await app.inject({ method: 'GET', url: '/v1/feed', headers: { authorization: 'Bearer demo-token' } })
+  const lunaPhoto = feed.json().items.find((item: any) => item.author.username === 'luna').photo_id
+
+  const anonymous = await app.inject({ method: 'GET', url: `/v1/photos/${lunaPhoto}/image` })
+  assert.equal(anonymous.statusCode, 401)
+
+  const unrelated = await app.inject({ method: 'GET', url: `/v1/photos/${lunaPhoto}/image`, headers: { authorization: 'Bearer demo-user-2' } })
+  assert.equal(unrelated.statusCode, 403)
+
+  const authorized = await app.inject({ method: 'GET', url: `/v1/photos/${lunaPhoto}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(authorized.statusCode, 200)
+  assert.equal(authorized.headers['content-type'], 'image/jpeg')
+  await app.close()
+})
+
+test('accepts a persistent device token for photo upload after pairing', async () => {
+  const devicePairStore = {
+    provider: 'prisma',
+    savePairCode: async () => undefined,
+    bind: async () => ({ deviceId: 'dvc_persistent_upload', deviceToken: 'device-secret' }),
+    status: async () => ({ status: 'bound' as const, deviceToken: 'device-secret', userId: 'u_demo_1' }),
+    deviceForToken: async (token?: string) => token === 'device-secret' ? { id: 'dvc_persistent_upload', userId: 'u_demo_1', user: { id: 'u_demo_1', username: 'ayan', displayName: '阿岩', friendCode: '100001' } } : undefined,
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-persistent-device-upload', devicePairStore })
+  const response = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer device-secret', 'content-type': 'image/jpeg', 'idempotency-key': 'persistent-upload-1', 'x-device-id': 'dvc_persistent_upload', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  assert.equal(response.statusCode, 201)
+  assert.equal(response.json().photo_id.startsWith('p_'), true)
+  await app.close()
+})
+
+test('dual-writes uploaded metadata through an injected photo repository', async () => {
+  const saved: any[] = []
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async (photo: any) => { saved.push(photo) },
+    findById: async () => undefined,
+    findByIdempotency: async () => undefined,
+    remove: async () => undefined,
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata-route', photoMetadataRepository })
+  const response = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'metadata-route-1', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  assert.equal(response.statusCode, 201)
+  assert.equal(saved.length, 1)
+  assert.match(saved[0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  await app.close()
+})
+
+test('deletes photo metadata through an injected repository after storage removal', async () => {
+  const removed: string[] = []
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async () => undefined,
+    findById: async () => undefined,
+    findByIdempotency: async () => undefined,
+    remove: async (id: string) => { removed.push(id) },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata-delete', photoMetadataRepository })
+  const created = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'metadata-delete-1', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  const photoId = created.json().photo_id
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${photoId}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 204)
+  assert.deepEqual(removed, [photoId])
+  await app.close()
+})
+
+test('keeps photo metadata when the injected repository cannot delete', async () => {
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async () => undefined,
+    findById: async () => undefined,
+    findByIdempotency: async () => undefined,
+    remove: async () => { throw new Error('database offline') },
+  }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-metadata-delete-failure', photoMetadataRepository })
+  const created = await app.inject({ method: 'POST', url: '/v1/photos', headers: { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'idempotency-key': 'metadata-delete-failure-1', 'x-width': '320', 'x-height': '240' }, payload: jpeg })
+  const photoId = created.json().photo_id
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${photoId}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 503)
+  assert.equal(deleted.json().error.code, 'PERSISTENCE_UNAVAILABLE')
+  const feed = await app.inject({ method: 'GET', url: '/v1/photos/mine', headers: { authorization: 'Bearer demo-token' } })
+  assert.ok(feed.json().items.some((item: any) => item.photo_id === photoId))
+  await app.close()
+})
+
+test('recovers persisted photo metadata for image reads and deletion after restart', async () => {
+  const persisted = { id: '33333333-3333-4333-8333-333333333333', authorId: 'u_demo_1', filterId: 'film', playType: 'ccd', beauty: 0, sticker: 'none', caption: '重启后仍在', circle: '小圈', width: 320, height: 240, createdAt: new Date().toISOString(), original: jpeg, processed: jpeg }
+  const removed: string[] = []
+  const photoMetadataRepository = {
+    provider: 'prisma',
+    create: async () => undefined,
+    findByIdempotency: async () => undefined,
+    findById: async (id: string) => id === persisted.id ? persisted : undefined,
+    remove: async (id: string) => { removed.push(id) },
+  }
+  const photoStorage = { save: async () => undefined, read: async () => jpeg, remove: async () => undefined }
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-photo-restart', photoMetadataRepository, photoStorage })
+  const image = await app.inject({ method: 'GET', url: `/v1/photos/${persisted.id}/image`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(image.statusCode, 200)
+  const deleted = await app.inject({ method: 'DELETE', url: `/v1/photos/${persisted.id}`, headers: { authorization: 'Bearer demo-token' } })
+  assert.equal(deleted.statusCode, 204)
+  assert.deepEqual(removed, [persisted.id])
+  await app.close()
+})
+
+test('feed paginates with next_cursor and pages never overlap', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-cursor' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const full = await app.inject({ method: 'GET', url: '/v1/feed?limit=32', headers })
+  const allIds = full.json().items.map((i: any) => i.photo_id)
+  assert.ok(allIds.length >= 5)
+  const walked: string[] = []
+  let cursor: string | null = null
+  let pages = 0
+  do {
+    const url = `/v1/feed?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+    const res = await app.inject({ method: 'GET', url, headers })
+    assert.equal(res.statusCode, 200)
+    const body = res.json()
+    walked.push(...body.items.map((i: any) => i.photo_id))
+    if (body.next_cursor) assert.equal(body.items.length, 2)
+    cursor = body.next_cursor
+    pages += 1
+    assert.ok(pages < 64)
+  } while (cursor)
+  assert.deepEqual(walked, allIds)
+  assert.equal(new Set(walked).size, walked.length)
+  await app.close()
+})
+
+test('feed rejects malformed cursors and survives a deleted cursor photo', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-cursor-edge' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const bad = await app.inject({ method: 'GET', url: '/v1/feed?limit=2&cursor=%2A%2A%2A', headers })
+  assert.equal(bad.statusCode, 400)
+  assert.equal(bad.json().error.code, 'BAD_REQUEST')
+  const jpegBody = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+  const up = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-width': '320', 'x-height': '240' }
+  await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...up, 'idempotency-key': 'cursor-a' }, payload: jpegBody })
+  await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...up, 'idempotency-key': 'cursor-b' }, payload: jpegBody })
+  const page1 = await app.inject({ method: 'GET', url: '/v1/feed?limit=1', headers })
+  const cursor = page1.json().next_cursor
+  assert.ok(cursor)
+  // Delete the photo the cursor points at, then resume: pagination falls back to createdAt.
+  await app.inject({ method: 'DELETE', url: `/v1/photos/${page1.json().items[0].photo_id}`, headers })
+  const page2 = await app.inject({ method: 'GET', url: `/v1/feed?limit=32&cursor=${encodeURIComponent(cursor)}`, headers })
+  assert.equal(page2.statusCode, 200)
+  assert.ok(!page2.json().items.some((i: any) => i.photo_id === page1.json().items[0].photo_id))
+  await app.close()
+})

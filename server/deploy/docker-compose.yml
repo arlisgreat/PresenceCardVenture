@@ -1,6 +1,7 @@
 # Presence Card · ECS 部署（docs/01-cloud-architecture.md）
 # 首次部署：cp .env.example .env 填值 → docker compose up -d →
 #           docker compose exec api npx prisma migrate deploy
+# /health 是 liveness；正式切流前请检查 /health/ready 返回 200。
 services:
   caddy:
     image: caddy:2-alpine
@@ -15,13 +16,23 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ../web/dist:/srv/web:ro   # web 构建产物（CI 或手动 npm run build）
       - caddy_data:/data
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
 
   api:
-    build: ../api
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
     restart: always
     env_file: .env                # DATABASE_URL 指向 db:5432
     depends_on: [db]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   db:
     image: postgres:16-alpine

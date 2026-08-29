@@ -11,3 +11,7 @@ Thumbs.db
 # ESP-IDF 生成物 (由 sdkconfig.defaults / idf_component.yml 再生)
 firmware/managed_components/
 firmware/sdkconfig.cores3
+server/api/uploads/
+.gstack/
+server/effects/output/
+server/effects/assets/
