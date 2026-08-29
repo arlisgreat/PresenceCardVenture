@@ -301,3 +301,49 @@ test('recovers persisted photo metadata for image reads and deletion after resta
   assert.deepEqual(removed, [persisted.id])
   await app.close()
 })
+
+test('feed paginates with next_cursor and pages never overlap', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-cursor' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const full = await app.inject({ method: 'GET', url: '/v1/feed?limit=32', headers })
+  const allIds = full.json().items.map((i: any) => i.photo_id)
+  assert.ok(allIds.length >= 5)
+  const walked: string[] = []
+  let cursor: string | null = null
+  let pages = 0
+  do {
+    const url = `/v1/feed?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+    const res = await app.inject({ method: 'GET', url, headers })
+    assert.equal(res.statusCode, 200)
+    const body = res.json()
+    walked.push(...body.items.map((i: any) => i.photo_id))
+    if (body.next_cursor) assert.equal(body.items.length, 2)
+    cursor = body.next_cursor
+    pages += 1
+    assert.ok(pages < 64)
+  } while (cursor)
+  assert.deepEqual(walked, allIds)
+  assert.equal(new Set(walked).size, walked.length)
+  await app.close()
+})
+
+test('feed rejects malformed cursors and survives a deleted cursor photo', async () => {
+  const app = await buildApp({ uploadsDir: '/tmp/presence-card-test-feed-cursor-edge' })
+  const headers = { authorization: 'Bearer demo-token' }
+  const bad = await app.inject({ method: 'GET', url: '/v1/feed?limit=2&cursor=%2A%2A%2A', headers })
+  assert.equal(bad.statusCode, 400)
+  assert.equal(bad.json().error.code, 'BAD_REQUEST')
+  const jpegBody = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+  const up = { authorization: 'Bearer demo-token', 'content-type': 'image/jpeg', 'x-width': '320', 'x-height': '240' }
+  await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...up, 'idempotency-key': 'cursor-a' }, payload: jpegBody })
+  await app.inject({ method: 'POST', url: '/v1/photos', headers: { ...up, 'idempotency-key': 'cursor-b' }, payload: jpegBody })
+  const page1 = await app.inject({ method: 'GET', url: '/v1/feed?limit=1', headers })
+  const cursor = page1.json().next_cursor
+  assert.ok(cursor)
+  // Delete the photo the cursor points at, then resume: pagination falls back to createdAt.
+  await app.inject({ method: 'DELETE', url: `/v1/photos/${page1.json().items[0].photo_id}`, headers })
+  const page2 = await app.inject({ method: 'GET', url: `/v1/feed?limit=32&cursor=${encodeURIComponent(cursor)}`, headers })
+  assert.equal(page2.statusCode, 200)
+  assert.ok(!page2.json().items.some((i: any) => i.photo_id === page1.json().items[0].photo_id))
+  await app.close()
+})

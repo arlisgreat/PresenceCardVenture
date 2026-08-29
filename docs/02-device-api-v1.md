@@ -274,6 +274,38 @@ sequenceDiagram
 
 ---
 
+## 4.1 账号体系（Web 端，2026-08 新增）
+
+| 端点 | 说明 |
+|------|------|
+| `POST /auth/register` | `{username, password, display_name?, invite_code?}` → `201 {token, expires_in: 259200, user}`。username 为 2-24 位字母/数字/下划线；password 6-128 位；带 6 位 `invite_code` 时注册即与对方互为好友。`409 ALREADY_EXISTS` 用户名被占用；`404 NOT_FOUND` 好友码不存在 |
+| `POST /auth/login` | `{username, password}` → `200 {token, expires_in, user}`；失败 `401 AUTH_FAILED` |
+| `POST /auth/logout` | 吊销当前 session token，`204` |
+
+- token 形如 `sess_<32hex>`，72h 有效；所有受保护端点继续用 `Authorization: Bearer <token>`。
+- demo 账号 `ayan / momo / luna` 密码均为 `demo1234`；旧 demo token（`demo-token` 等）继续可用。
+- 密码存储：scrypt（64 字节，16 字节随机 salt），比较用 constant-time。
+
+## 4.2 圈子（小圈 + 大圈订阅，2026-08 新增）
+
+圈子分两类：`small`（小圈，好友圈，无需加入）与 `big`（大圈，订阅门控的兴趣圈）。大圈照片**只认订阅，不认好友关系**——作者不是你的好友也能看到，前提是你订阅了对应大圈。
+
+| 端点 | 说明 |
+|------|------|
+| `GET /circles` | `{items: [{id, name, type, joined, photo_count, subscriber_count}]}`。首项固定为虚拟小圈 `c_small`（无 circleId 的好友照片集合） |
+| `POST /circles` | `{name}`（1-32 字符）→ `201`。创建大圈并自动加入；重名 `409 ALREADY_EXISTS` |
+| `POST /circles/{id}/join` | 订阅大圈，`200` 返回更新后的 circle 对象 |
+| `POST /circles/{id}/leave` | 退订，`204` |
+| `GET /circles/{id}/feed?limit=` | 圈内照片流。未订阅大圈 `403 FORBIDDEN`，不存在 `404`；`c_small` 返回无 `circleId` 的好友照片 |
+
+发帖到大圈：上传照片时带请求头 `X-Circle-Id: <circle_id>`。`c_small` 或不带 = 小圈；其他 id 必须已订阅，否则 `403` / 圈子不存在 `404`。feed item 增加 `circle_id` 字段（小圈照片为 `null`）。
+
+Feed 过滤与设备混流：
+- `GET /feed?circle_id=<id>`：服务端按圈过滤；`circle_id=c_small` 只返回小圈（无 `circleId`）照片。
+- 设备 token 或 `?mode=device` 走混流语义：好友照片按时间倒序；好友 24h 无更新时，混入已订阅大圈的精选照片（上限 10 张，排除本人与好友作品）。
+
+---
+
 ## 5. 滤镜清单（设备端实现，服务器只存 id）
 
 滤镜在**设备端**用 LUT/调色实现（ESP32-S3 处理 320×240 无压力），服务器只保存 `filter_id` 元数据。滤镜清单由固件定义并在此登记：

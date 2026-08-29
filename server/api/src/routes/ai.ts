@@ -109,11 +109,19 @@ export async function aiRoutes(app: FastifyInstance, store: DemoStore, provider:
       if (job.status !== 'completed') return reply.code(409).send(errorBody('AI_NOT_READY', 'AI result is not ready'))
       const source = job.resultPhotoId ? store.photos.get(job.resultPhotoId) : undefined
       if (!source) return reply.code(409).send(errorBody('AI_RESULT_UNAVAILABLE', 'AI result is unavailable'))
-      const body = (request.body ?? {}) as { caption?: unknown; circle?: unknown }
-      const requestedCaption = body.caption === undefined ? '两份在场，遇见一次。' : String(body.caption)
+      const body = (request.body ?? {}) as { caption?: unknown; circle?: unknown; circle_id?: unknown }
+      const requestedCaption = body.circle === undefined && body.circle_id !== undefined ? undefined : body.caption
+      const cap0 = requestedCaption === undefined ? (body.caption === undefined ? '两份在场，遇见一次。' : String(body.caption)) : String(requestedCaption)
       const aiLabel = 'AI 合照 · '
-      const caption = source.aiGenerated && !requestedCaption.startsWith(aiLabel) ? `${aiLabel}${requestedCaption}` : requestedCaption
-      const circle = body.circle === undefined ? '小圈' : String(body.circle)
+      const caption = source.aiGenerated && !cap0.startsWith(aiLabel) ? `${aiLabel}${cap0}` : cap0
+      let circle = body.circle === undefined ? '小圈' : String(body.circle)
+      let circleId: string | undefined
+      if (body.circle_id !== undefined && body.circle_id !== null && body.circle_id !== 'c_small') {
+        const c = store.circles.get(String(body.circle_id))
+        if (!c) return reply.code(404).send(errorBody('NOT_FOUND', 'circle not found'))
+        if (!store.subscriptionsFor(user.id).has(c.id)) return reply.code(403).send(errorBody('FORBIDDEN', 'join the circle before publishing to it'))
+        circleId = c.id; circle = c.name
+      }
       if (caption.length > 140 || !circle || circle.length > 32) return reply.code(400).send(errorBody('BAD_REQUEST', 'caption must be at most 140 characters and circle must be between 1 and 32 characters'))
       try { await authorize(inputFor(job), 'publish') } catch (error) {
         const safe = safeAiError(error)
@@ -122,7 +130,7 @@ export async function aiRoutes(app: FastifyInstance, store: DemoStore, provider:
       // A draft is owner-only. Only this explicit publish step creates a feed photo.
       const { draftJobId: _draft, ...sourceFields } = source
       const photo: Photo = {
-        ...sourceFields, id: `p_ai_${randomUUID()}`, authorId: user.id, caption, circle,
+        ...sourceFields, id: `p_ai_${randomUUID()}`, authorId: user.id, caption, circle, circleId,
         createdAt: new Date().toISOString(), idempotencyKey: undefined, deviceId: undefined,
         ...(isSimulation(provider) ? { aiGenerated: false, generation: { provider: 'simulator', model: 'none', promptVersion: 'simulation' } } : {}),
       }
@@ -157,5 +165,5 @@ export async function aiRoutes(app: FastifyInstance, store: DemoStore, provider:
 }
 
 function publishedBody(job: Job, photo: Photo) {
-  return { photo_id: photo.id, url: `/v1/photos/${photo.id}/image`, created_at: photo.createdAt, caption: photo.caption, circle: photo.circle, source_job_id: job.id }
+  return { photo_id: photo.id, url: `/v1/photos/${photo.id}/image`, created_at: photo.createdAt, caption: photo.caption, circle: photo.circle, circle_id: photo.circleId ?? null, source_job_id: job.id }
 }

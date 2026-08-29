@@ -93,6 +93,7 @@ paths:
         - { name: X-Device-ID, in: header, required: true, schema: { type: string, example: dvc_a1b2c3d4e5f6 }, description: "必须与配对时的 device_id 一致" }
         - { name: X-Filter-Id, in: header, required: true, schema: { type: string, example: warm } }
         - { name: X-Circle, in: header, required: false, schema: { type: string, example: "傍晚的天空" }, description: "URL-encode 的 UTF-8，默认小圈" }
+        - { name: X-Circle-Id, in: header, required: false, schema: { type: string, example: c_sky }, description: "发帖到大圈；必须已订阅，否则 403/404。c_small 或不带 = 小圈" }
         - { name: X-Caption, in: header, required: false, schema: { type: string }, description: "URL-encode 的 UTF-8，≤140 字符" }
         - { name: X-Width, in: header, required: true, schema: { type: integer, example: 320 } }
         - { name: X-Height, in: header, required: true, schema: { type: integer, example: 240 } }
@@ -162,6 +163,8 @@ paths:
       parameters:
         - { name: cursor, in: query, required: false, schema: { type: string } }
         - { name: limit, in: query, required: false, schema: { type: integer, default: 8, maximum: 32 } }
+        - { name: circle_id, in: query, required: false, schema: { type: string }, description: 按圈过滤；c_small = 只返回小圈（无 circleId）照片 }
+        - { name: mode, in: query, required: false, schema: { type: string, enum: [device] }, description: 设备混流语义：好友 24h 无更新时混入已订阅大圈精选（≤10 张） }
         - { name: If-None-Match, in: header, required: false, schema: { type: string } }
       responses:
         "200":
@@ -172,6 +175,145 @@ paths:
         "304":
           description: 无更新（ETag 命中）
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: 注册账号（可带好友码，注册即互为好友）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, pattern: '^[a-zA-Z0-9_]{2,24}$' }
+                password: { type: string, minLength: 6, maxLength: 128 }
+                display_name: { type: string, maxLength: 32 }
+                invite_code: { type: string, pattern: '^\d{6}$' }
+      responses:
+        "201":
+          description: 注册成功，返回会话 token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { description: 好友码不存在 }
+        "409": { description: 用户名已被占用 }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: 登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResult" }
+        "401": { description: AUTH_FAILED 用户名或密码错误 }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: 登出（吊销当前 session token）
+      responses:
+        "204": { description: 已登出 }
+
+  /circles:
+    get:
+      tags: [circles]
+      summary: 圈子列表（首项为虚拟小圈 c_small）
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Circle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [circles]
+      summary: 创建大圈（自动加入）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 32 }
+      responses:
+        "201":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Circle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: ALREADY_EXISTS 同名圈子已存在 }
+
+  /circles/{circle_id}/join:
+    post:
+      tags: [circles]
+      summary: 订阅大圈
+      parameters:
+        - { name: circle_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Circle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /circles/{circle_id}/leave:
+    post:
+      tags: [circles]
+      summary: 退订大圈
+      parameters:
+        - { name: circle_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已退订 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /circles/{circle_id}/feed:
+    get:
+      tags: [circles]
+      summary: 圈内照片流（大圈需订阅）
+      parameters:
+        - { name: circle_id, in: path, required: true, schema: { type: string }, description: c_small 返回无 circleId 的好友照片 }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 16, maximum: 32 } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/FeedItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: FORBIDDEN 未订阅该大圈 }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /photos/{photo_id}/reactions:
     post:
@@ -390,6 +532,31 @@ components:
         my_reactions:
           type: array
           items: { type: string }
+        circle: { type: string, nullable: true, description: 圈子显示名 }
+        circle_id: { type: string, nullable: true, description: 所属大圈 id；小圈照片为 null }
+
+    AuthResult:
+      type: object
+      properties:
+        token: { type: string, example: sess_9f2c... }
+        expires_in: { type: integer, example: 259200, description: 秒，72h }
+        user:
+          type: object
+          properties:
+            id: { type: string }
+            username: { type: string }
+            display_name: { type: string }
+            friend_code: { type: string, example: "100001" }
+
+    Circle:
+      type: object
+      properties:
+        id: { type: string, example: c_sky }
+        name: { type: string, example: 傍晚的天空 }
+        type: { type: string, enum: [small, big] }
+        joined: { type: boolean }
+        photo_count: { type: integer }
+        subscriber_count: { type: integer }
 
     FeedPage:
       type: object
