@@ -237,7 +237,8 @@ def run_checks(ev, http, sleeps, boots, panics):
     else:
         r.add("C11", "SKIP", f"stat 心跳不足 ({len(heaps)} 条, 需≥4, 跑久一点)")
 
-    # C13 预览帧率 (目标 25fps, 定时器 40ms; 低于阈值说明渲染/总线过载)
+    # C13 预览帧率 (产品定标 10fps, 2026-08 决策: LVGL canvas+SPI 串行
+    # 架构天花板 ~12fps, 复古相机取景观感可接受; 25fps 需 esp_lcd 直推重构)
     pp = evs("perf_preview")
     fps = [int(d["fps"]) for d in pp if "fps" in d]
     # 拍照/翻相册的那一秒帧率会掉, 排除 0 帧样本后再统计, 但单独报告停顿
@@ -246,9 +247,9 @@ def run_checks(ev, http, sleeps, boots, panics):
         avg = statistics.mean(active)
         cpu = [int(d.get("cpu_pct", 0)) for d in pp]
         stalls = len(fps) - len(active)
-        if avg < 10:
+        if avg < 5:
             v = "FAIL"
-        elif avg < 20:
+        elif avg < 8:
             v = "WARN"
         else:
             v = "PASS"

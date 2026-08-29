@@ -89,6 +89,13 @@ void pvc_net_signal_feed(void);
  */
 bool pvc_net_synced(void);
 
+/*
+ * 重新配网 (换 WiFi 环境): 清除 NVS 中的 WiFi 凭据并重启 —— 重启后自然
+ * 落入 BLE 配网页 (内存编排要求射频先于相机初始化, 活体切换不可行)。
+ * 配对 token 保留 (仍绑定原账号)。任意任务可调, 不返回。
+ */
+void pvc_net_reprovision(void);
+
 /* 工程模式 (§6): 打印 token 前 8 位 / 状态 / 队列深度 / 堆余量 */
 void pvc_net_debug_dump(void);
 

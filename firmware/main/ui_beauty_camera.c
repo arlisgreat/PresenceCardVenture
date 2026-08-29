@@ -89,6 +89,7 @@ static void close_panel(void);
 static void panel_done_cb(lv_event_t *e);
 static void style_tool_btn(lv_obj_t *btn);
 static void open_filter_panel(void);
+static void on_net_status_click(lv_event_t *e);
 static void open_feed(void);
 static void render_feed(void);
 static void do_like(void);
@@ -1401,6 +1402,10 @@ void ui_beauty_camera_create(void)
     lv_label_set_text(s_status_r, "100%");
     lv_obj_set_pos(s_status_r, UI_W - 42, 4);
     lv_obj_set_style_text_color(s_status_r, lv_color_make(0xf4, 0x8c, 0x7f), 0);
+    /* 离线状态可点击进入重新配网 (换 WiFi 环境); 扩大触摸热区 */
+    lv_obj_add_flag(s_status_r, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_status_r, 14);
+    lv_obj_add_event_cb(s_status_r, on_net_status_click, LV_EVENT_CLICKED, NULL);
 
     /* 滤镜缩略图只在弹出面板显示; 不常驻遮挡低分辨率取景画面。 */
     s_thumb_raw = PSRAM_MALLOC(THUMB_SZ * THUMB_SZ * 2);
@@ -1787,6 +1792,24 @@ void ui_net_hide_pair(void)
         s_pair_panel = NULL;
     }
     bsp_display_unlock();
+}
+
+/*
+ * 状态文字点击: WiFi 未连接 (换了环境等) 时进入重新配网。
+ * 3 秒内点两次才执行 (防误触); 重配 = 清凭据 + 重启落 BLE 配网页。
+ */
+static void on_net_status_click(lv_event_t *e)
+{
+    (void)e;
+    if (pvc_net_state() == PVC_NET_ONLINE) return;   /* 在线不响应 */
+    static int64_t s_last_us;
+    int64_t now = esp_timer_get_time();
+    if (now - s_last_us < 3000000) {
+        toast_show("正在重启进入配网");
+        pvc_net_reprovision();                        /* 不返回 */
+    }
+    s_last_us = now;
+    toast_show("再点一次重新配网");
 }
 
 void ui_net_set_status(const char *txt)

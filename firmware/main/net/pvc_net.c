@@ -2,6 +2,7 @@
 #include "pvc_store.h"
 #include "pvc_pair.h"
 #include "pvc_prov.h"
+#include "esp_system.h"    /* esp_restart (重新配网) */
 #include "pvc_upload.h"
 #include "pvc_feed.h"
 #include "pvc_config.h"
@@ -245,6 +246,15 @@ static void net_task(void *arg)
                                                                   : DRAIN_PERIOD_MS));
         xEventGroupClearBits(s_ev, BIT_PHOTO);
     }
+}
+
+void pvc_net_reprovision(void)
+{
+    PVC_EV("net reprovision=1");
+    printf("[FW] REPROVISION user requested, clearing wifi creds\n");
+    pvc_prov_reset();          /* 清 NVS WiFi 凭据 (token 保留) */
+    vTaskDelay(pdMS_TO_TICKS(300));   /* 让 NVS 提交与日志出完 */
+    esp_restart();
 }
 
 void pvc_net_signal_feed(void)
