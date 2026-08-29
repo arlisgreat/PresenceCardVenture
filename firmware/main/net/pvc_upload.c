@@ -32,6 +32,7 @@ typedef struct up_item {
     char     filter[16];
     int      beauty;        /* X-Beauty 0-100 (重启恢复条目为 0) */
     char     caption[96];   /* UTF-8 原文; 发送时 URL-encode (重启恢复为空) */
+    char     circle[48];    /* Community 小圈; 重启恢复为“小圈” */
 } up_item_t;
 
 static up_item_t *s_head;
@@ -91,6 +92,7 @@ void pvc_upload_init(void)
         snprintf(it->key, sizeof(it->key), "%s-%lu-%lu",
                  pvc_store_device_id(), boot, seq);
         strncpy(it->filter, filter, sizeof(it->filter) - 1);
+        strncpy(it->circle, "小圈", sizeof(it->circle) - 1);
         list_append(it);
         n++;
     }
@@ -100,7 +102,7 @@ void pvc_upload_init(void)
 
 esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
                              const char *filter_id, int beauty,
-                             const char *caption)
+                             const char *caption, const char *circle)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
 
@@ -114,6 +116,8 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
     strncpy(it->filter, filter_id, sizeof(it->filter) - 1);
     it->beauty = (beauty < 0) ? 0 : (beauty > 100 ? 100 : beauty);
     if (caption) strncpy(it->caption, caption, sizeof(it->caption) - 1);
+    strncpy(it->circle, (circle && circle[0]) ? circle : "小圈",
+            sizeof(it->circle) - 1);
 
     /* 优先落盘 (断电不丢) */
     mkdir(QUEUE_DIR, 0755);
@@ -206,7 +210,7 @@ static void url_encode(const char *src, char *dst, size_t cap)
 /* 发送一个条目一次。返回 HTTP 状态码 (传输层失败返回 -1)。 */
 static int item_post(up_item_t *it, const uint8_t *jpg, size_t len, char *rbuf, size_t rcap)
 {
-    char beauty_s[8], cap_enc[288];
+    char beauty_s[8], cap_enc[288], circle_enc[144];
     snprintf(beauty_s, sizeof(beauty_s), "%d", it->beauty);
     pvc_hdr_t hdrs[8];
     int nh = 0;
@@ -221,6 +225,8 @@ static int item_post(up_item_t *it, const uint8_t *jpg, size_t len, char *rbuf, 
         url_encode(it->caption, cap_enc, sizeof(cap_enc));
         hdrs[nh++] = (pvc_hdr_t){ "X-Caption", cap_enc };
     }
+    url_encode(it->circle[0] ? it->circle : "小圈", circle_enc, sizeof(circle_enc));
+    hdrs[nh++] = (pvc_hdr_t){ "X-Circle", circle_enc };
     pvc_http_req_t req = {
         .method = "POST", .path = "/photos", .auth = true,
         .content_type = "image/jpeg",

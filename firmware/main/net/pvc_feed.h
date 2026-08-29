@@ -25,6 +25,7 @@ typedef struct {
     char photo_id[48];
     char author[24];       /* display_name (UTF-8, 截断安全) */
     char caption[96];
+    char circle[48];       /* Community 小圈 */
     char filter[16];
     uint16_t hearts;       /* reactions.heart 计数 */
     bool mine;             /* 是否本人照片 (被赞检测用) */

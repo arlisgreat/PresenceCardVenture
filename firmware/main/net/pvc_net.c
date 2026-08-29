@@ -2,6 +2,7 @@
 #include "pvc_store.h"
 #include "pvc_pair.h"
 #include "pvc_prov.h"
+#include "pvc_http.h"
 #include "pvc_upload.h"
 #include "pvc_feed.h"
 #include "pvc_config.h"
@@ -14,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -27,6 +29,7 @@ static const char *TAG = "pvc_net";
 #define BIT_WIFI_UP   BIT0
 #define BIT_PHOTO     BIT1
 #define BIT_FEED      BIT2        /* UI 请求立即拉 feed / 发点赞 */
+#define BIT_MESSAGE   BIT3        /* UI 请求发送 Community 轻信号 */
 #define DRAIN_PERIOD_MS 60000     /* 空闲时每 60s 尝试排空一次待传队列 */
 #define FEED_POLL_MS  (5 * 60 * 1000)  /* §3: 轮询间隔 >= 5 分钟 */
 
@@ -34,6 +37,50 @@ static EventGroupHandle_t s_ev;
 static pvc_net_ui_t s_ui;
 static pvc_net_state_t s_state = PVC_NET_IDLE;
 static volatile bool s_feed_synced;   /* 本次启动后 feed 是否成功轮询过 */
+
+typedef struct {
+    char friend_name[24];
+    char text[96];
+} msg_req_t;
+static QueueHandle_t s_msg_q;
+
+/* 只接收 UI 内置短句: 禁止会破坏 JSON 的控制符/引号/反斜杠。 */
+static bool message_text_safe(const char *s)
+{
+    if (!s || !s[0]) return false;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 0x20 || *p == '"' || *p == '\\') return false;
+    }
+    return true;
+}
+
+static int process_messages(void)
+{
+    if (!s_msg_q) return 0;
+    msg_req_t msg;
+    while (xQueueReceive(s_msg_q, &msg, 0) == pdTRUE) {
+        char body[192], rbuf[384];
+        snprintf(body, sizeof(body), "{\"friend\":\"%s\",\"body\":\"%s\"}",
+                 msg.friend_name, msg.text);
+        pvc_http_req_t req = {
+            .method = "POST", .path = "/messages", .auth = true,
+            .content_type = "application/json",
+            .body = (const uint8_t *)body, .body_len = strlen(body),
+        };
+        pvc_http_resp_t resp = { .buf = rbuf, .cap = sizeof(rbuf) };
+        esp_err_t err = pvc_http_request(&req, &resp);
+        if (err != ESP_OK || resp.status >= 500) {
+            xQueueSendToFront(s_msg_q, &msg, 0);
+            PVC_EV("message_defer friend=%s status=%d", msg.friend_name,
+                   err == ESP_OK ? resp.status : -1);
+            return 0;
+        }
+        if (resp.status == 401) return PVC_FEED_AUTH;
+        PVC_EV("message_sent friend=%s status=%d ok=%d", msg.friend_name,
+               resp.status, (int)(resp.status >= 200 && resp.status < 300));
+    }
+    return 0;
+}
 
 static void set_state(pvc_net_state_t st, const char *detail)
 {
@@ -199,6 +246,11 @@ static void net_task(void *arg)
             continue;
         }
 
+        if (process_messages() == PVC_FEED_AUTH) {
+            pvc_store_clear_token();
+            continue;
+        }
+
         /* feed 轮询 (§3.1/3.2): 首次上线 / UI 请求 / 每 5 分钟 */
         int64_t now = esp_timer_get_time();
         bool feed_req = (xEventGroupClearBits(s_ev, BIT_FEED) & BIT_FEED) != 0;
@@ -240,10 +292,11 @@ static void net_task(void *arg)
         }
 
         /* 等新照片/feed 信号或周期唤醒 */
-        xEventGroupWaitBits(s_ev, BIT_PHOTO | BIT_FEED, pdFALSE, pdFALSE,
+        xEventGroupWaitBits(s_ev, BIT_PHOTO | BIT_FEED | BIT_MESSAGE,
+                            pdFALSE, pdFALSE,
                             pdMS_TO_TICKS(r == PVC_UP_RETRY_LATER ? 15000
                                                                   : DRAIN_PERIOD_MS));
-        xEventGroupClearBits(s_ev, BIT_PHOTO);
+        xEventGroupClearBits(s_ev, BIT_PHOTO | BIT_MESSAGE);
     }
 }
 
@@ -266,6 +319,8 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
     if (ui) s_ui = *ui;
     s_ev = xEventGroupCreate();
     if (!s_ev) return ESP_ERR_NO_MEM;
+    s_msg_q = xQueueCreate(4, sizeof(msg_req_t));
+    if (!s_msg_q) return ESP_ERR_NO_MEM;
 
     esp_err_t err = pvc_store_init();
     if (err != ESP_OK) return err;
@@ -282,11 +337,24 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
 
 esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len,
                                 const char *filter_id, int beauty,
-                                const char *caption)
+                                const char *caption, const char *circle)
 {
-    esp_err_t err = pvc_upload_enqueue(jpg, len, filter_id, beauty, caption);
+    esp_err_t err = pvc_upload_enqueue(jpg, len, filter_id, beauty, caption, circle);
     if (err == ESP_OK && s_ev) xEventGroupSetBits(s_ev, BIT_PHOTO);
     return err;
+}
+
+esp_err_t pvc_net_send_message_async(const char *friend, const char *text)
+{
+    if (!s_msg_q || !message_text_safe(friend) || !message_text_safe(text)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    msg_req_t msg = { 0 };
+    strncpy(msg.friend_name, friend, sizeof(msg.friend_name) - 1);
+    strncpy(msg.text, text, sizeof(msg.text) - 1);
+    if (xQueueSend(s_msg_q, &msg, 0) != pdTRUE) return ESP_ERR_NO_MEM;
+    if (s_ev) xEventGroupSetBits(s_ev, BIT_MESSAGE);
+    return ESP_OK;
 }
 
 void pvc_net_debug_dump(void)

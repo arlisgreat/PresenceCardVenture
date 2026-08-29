@@ -78,7 +78,10 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui);
  */
 esp_err_t pvc_net_enqueue_photo(const uint8_t *jpg, size_t len,
                                 const char *filter_id, int beauty,
-                                const char *caption);
+                                const char *caption, const char *circle);
+
+/* 向 Community 轻信号发送预设短消息。friend 为好友 username。 */
+esp_err_t pvc_net_send_message_async(const char *friend, const char *text);
 
 /* 请求立即拉取 feed / 发送积压点赞 (UI 打开好友页或点赞后调用) */
 void pvc_net_signal_feed(void);

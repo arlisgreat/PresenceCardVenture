@@ -63,7 +63,8 @@ static void sd_save_slot(const slot_t *s)
     snprintf(path, sizeof(path), FEED_DIR "/%s.txt", s->meta.photo_id);
     f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "%s\n%s\n%s\n", s->meta.author, s->meta.caption, s->meta.filter);
+    fprintf(f, "%s\n%s\n%s\n%s\n", s->meta.author, s->meta.caption,
+            s->meta.filter, s->meta.circle);
     fclose(f);
 }
 
@@ -145,8 +146,12 @@ void pvc_feed_init(void)
                 s->meta.caption[strcspn(s->meta.caption, "\r\n")] = '\0';
             if (fgets(s->meta.filter, sizeof(s->meta.filter), f))
                 s->meta.filter[strcspn(s->meta.filter, "\r\n")] = '\0';
+            if (fgets(s->meta.circle, sizeof(s->meta.circle), f))
+                s->meta.circle[strcspn(s->meta.circle, "\r\n")] = '\0';
             fclose(f);
         }
+        if (!s->meta.circle[0])
+            strncpy(s->meta.circle, "小圈", sizeof(s->meta.circle) - 1);
         n++;
     }
     fclose(idx);
@@ -254,6 +259,10 @@ int pvc_feed_poll(void)
                       au ? cJSON_GetObjectItem(au, "display_name") : NULL);
         copy_json_str(s->meta.caption, sizeof(s->meta.caption),
                       cJSON_GetObjectItem(it, "caption"));
+        copy_json_str(s->meta.circle, sizeof(s->meta.circle),
+                      cJSON_GetObjectItem(it, "circle"));
+        if (!s->meta.circle[0])
+            strncpy(s->meta.circle, "小圈", sizeof(s->meta.circle) - 1);
         copy_json_str(s->meta.filter, sizeof(s->meta.filter),
                       cJSON_GetObjectItem(it, "filter_id"));
         const cJSON *jre = cJSON_GetObjectItem(it, "reactions");
