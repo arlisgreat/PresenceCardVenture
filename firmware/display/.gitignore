@@ -1,0 +1,6 @@
+.pio/
+__pycache__/
+*.pyc
+include/device_config.h
+include/device_config_stamp.h
+backups/
