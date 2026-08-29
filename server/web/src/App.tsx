@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import QRCode from 'qrcode'
-import { AiJob, CircleInfo, CurrentUser, DeviceConfig, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, createCircle, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCircleFeed, getCircles, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, joinCircle, leaveCircle, loginAccount, logoutAccount, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, registerAccount, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
+import { AiJob, CircleInfo, CurrentUser, DeviceConfig, FeedItem, Friend, FriendRequest, Message, PlayType, acceptFriendRequest, bindDevice, createAiJob, createCircle, deleteAiJob, deletePhoto, deviceAck, deviceHeartbeat, getAiJob, getCircleFeed, getCircles, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeedPage, getFriendRequests, getFriends, getMessages, getPairStatus, joinCircle, leaveCircle, loginAccount, logoutAccount, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, registerAccount, requestPairCode, sendFriendRequest, sendMessage, uploadDevicePhoto, uploadPhoto } from './api'
 import { acknowledgeDeviceConfig, queueDeviceConfig, type DeviceConfigSyncState } from './device-config'
 import { clearDevicePairLinkFromUrl, readDevicePairLink } from './device-pair-link'
 import { completeDevicePairing } from './device-pairing'
@@ -108,6 +108,8 @@ function App() {
   const authRequired = hasExplicitUserSession() || Boolean(inviteCodeFromUrl)
   const [view, setView] = useState<View>(() => devicePairLink ? 'device' : 'feed')
   const [feed, setFeed] = useState<FeedItem[]>([])
+  const [feedCursor, setFeedCursor] = useState<string | null>(null)
+  const [feedLoadingMore, setFeedLoadingMore] = useState(false)
   const [circles, setCircles] = useState<CircleInfo[]>([])
   const [circle, setCircle] = useState('all')
   const [toast, setToast] = useState('')
@@ -129,7 +131,7 @@ function App() {
 
   useEffect(() => {
     if (!authReady || (authRequired && !authUser)) return
-    void getFeed().then(setFeed).catch(() => setToast('圈子暂时无法读取，请检查连接或登录状态'))
+    void getFeedPage().then(page => { setFeed(page.items); setFeedCursor(page.nextCursor) }).catch(() => setToast('圈子暂时无法读取，请检查连接或登录状态'))
     void getCircles().then(setCircles).catch(() => setToast('圈子列表暂时无法读取'))
     void getDeviceState().then(setDeviceState).catch(() => setToast('设备状态暂时无法读取'))
   }, [authReady, authRequired, authUser])
@@ -138,10 +140,25 @@ function App() {
   async function onSelectCircle(circleId: string) {
     setCircle(circleId)
     try {
-      const items = circleId === 'all' ? await getFeed() : circleId === 'c_small' ? await getFeed('c_small') : await getCircleFeed(circleId)
-      setFeed(items)
+      const page = await getFeedPage(circleId === 'all' ? undefined : circleId)
+      setFeed(page.items)
+      setFeedCursor(page.nextCursor)
     } catch {
       setToast('这个圈子暂时无法读取，请稍后再试')
+    }
+  }
+
+  async function onLoadMoreFeed() {
+    if (!feedCursor || feedLoadingMore) return
+    setFeedLoadingMore(true)
+    try {
+      const page = await getFeedPage(circle === 'all' ? undefined : circle, feedCursor)
+      setFeed(current => [...current, ...page.items.filter(item => !current.some(entry => entry.id === item.id))])
+      setFeedCursor(page.nextCursor)
+    } catch {
+      setToast('更早的照片暂时拉不动，稍后再滑一次')
+    } finally {
+      setFeedLoadingMore(false)
     }
   }
 
@@ -149,8 +166,9 @@ function App() {
     setAuthUser(user)
     setCircle('all')
     try {
-      const [items, circleList, state] = await Promise.all([getFeed(), getCircles(), getDeviceState()])
-      setFeed(items)
+      const [page, circleList, state] = await Promise.all([getFeedPage(), getCircles(), getDeviceState()])
+      setFeed(page.items)
+      setFeedCursor(page.nextCursor)
       setCircles(circleList)
       setDeviceState(state)
       setToast(`欢迎回来，${user.display_name}`)
@@ -164,13 +182,12 @@ function App() {
     await logoutAccount()
     setAuthUser(null)
     setFeed([])
+    setFeedCursor(null)
     setCircles([])
     setCircle('all')
     setView('feed')
     setToast('已退出登录')
   }
-
-  const visibleFeed = useMemo(() => filterFeedByCircle(feed, circle), [circle, feed])
 
   async function onReact(item: FeedItem) {
     const reactionKey = `${item.id}:heart`
@@ -241,7 +258,7 @@ function App() {
           <div className="top-actions"><span className="live-dot" /> <span className="top-date">2026.08.30</span><button className="text-button" onClick={() => setView('device')}>设备 {deviceState.unseen_count}</button></div>
         </header>
 
-        {view === 'feed' && <FeedView feed={visibleFeed} allFeed={feed} circles={circles} circle={circle} onCircle={id => void onSelectCircle(id)} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} onCreate={() => setView('create')} onBrowseCircles={() => setView('circles')} />}
+        {view === 'feed' && <FeedView feed={feed} circles={circles} circle={circle} hasMore={Boolean(feedCursor)} loadingMore={feedLoadingMore} onLoadMore={() => void onLoadMoreFeed()} onCircle={id => void onSelectCircle(id)} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} onCreate={() => setView('create')} onBrowseCircles={() => setView('circles')} />}
         {view === 'circles' && <CirclesView circles={circles} onCircles={setCircles} onToast={setToast} onOpenCircle={id => { void onSelectCircle(id); setView('feed') }} onReact={onReact} onPoke={onPoke} onHeartBurst={onHeartBurst} heartBurst={heartBurst} onDelete={onDelete} />}
         {view === 'footprint' && <FootprintView feed={feed.filter(item => item.mine)} onDelete={onDelete} />}
         {view === 'library' && <PlayLibraryView selected={selectedConfig} onChoose={selection => { setSelectedConfig(selection); setToast(`${selection.name} 已准备好，可在设备页下发`) }} />}
@@ -255,15 +272,59 @@ function App() {
   )
 }
 
-function FeedView({ feed, allFeed, circles, circle, onCircle, onReact, onPoke, onHeartBurst, heartBurst, onDelete, onCreate, onBrowseCircles }: { feed: FeedItem[]; allFeed: FeedItem[]; circles: CircleInfo[]; circle: string; onCircle: (circleId: string) => void; onReact: (item: FeedItem) => void; onPoke: (item: FeedItem) => void; onHeartBurst: (item: FeedItem) => void; heartBurst: string | null; onDelete: (item: FeedItem) => void; onCreate: () => void; onBrowseCircles: () => void }) {
+function FeedView({ feed, circles, circle, hasMore, loadingMore, onLoadMore, onCircle, onReact, onPoke, onHeartBurst, heartBurst, onDelete, onCreate, onBrowseCircles }: { feed: FeedItem[]; circles: CircleInfo[]; circle: string; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void; onCircle: (circleId: string) => void; onReact: (item: FeedItem) => void; onPoke: (item: FeedItem) => void; onHeartBurst: (item: FeedItem) => void; heartBurst: string | null; onDelete: (item: FeedItem) => void; onCreate: () => void; onBrowseCircles: () => void }) {
   const joined = circles.filter(item => item.joined || item.type === 'small')
   const tabs: Array<{ id: string; name: string }> = [{ id: 'all', name: '全部' }, ...joined.map(item => ({ id: item.id, name: item.name }))]
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const loadMoreRef = useRef(onLoadMore)
+  useEffect(() => { loadMoreRef.current = onLoadMore }, [onLoadMore])
+  const observerSupported = typeof IntersectionObserver !== 'undefined'
+  useEffect(() => {
+    if (!observerSupported || !hasMore) return
+    const node = sentinelRef.current
+    if (!node) return
+    const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) loadMoreRef.current() }, { rootMargin: '600px 0px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [observerSupported, hasMore])
   return <section className="content-wrap feed-view">
     <div className="feed-intro"><div><p className="section-kicker">CIRCLE / 朋友的小圈</p><p className="intro-copy">没有推送，只有刚好想起你的人。</p></div><button className="primary-button" onClick={onCreate}><span>＋</span>释放一张</button></div>
-    <div className="circle-tabs">{tabs.map(item => <button key={item.id} className={item.id === circle ? 'circle-tab selected' : 'circle-tab'} onClick={() => onCircle(item.id)}>{item.name}<span>{String(item.id === 'all' ? allFeed.length : circles.find(entry => entry.id === item.id)?.photo_count ?? 0).padStart(2, '0')}</span></button>)}<button className="circle-tab circle-tab-more" onClick={onBrowseCircles}>发现大圈<span>◎</span></button></div>
-    <div className="feed-grid">{feed.length === 0 ? <div className="empty-state"><span>◌</span><h2>圈子还在等第一张照片</h2><p>释放今天的一个瞬间，朋友会在这里遇见它。</p></div> : feed.map((item, index) => <div className="feed-cell" key={item.id} style={{ animationDelay: `${Math.min(index, 8) * 60}ms` }}><PhotoCard item={item} burst={heartBurst === item.id} onReact={() => onReact(item)} onPoke={() => onPoke(item)} onHeartBurst={() => onHeartBurst(item)} onDelete={() => onDelete(item)} /></div>)}</div>
-    <div className="feed-footer"><span>—</span> 今天的在场，到这里刚刚好 <span>—</span></div>
+    <div className="circle-tabs">{tabs.map(item => <button key={item.id} className={item.id === circle ? 'circle-tab selected' : 'circle-tab'} onClick={() => onCircle(item.id)}>{item.name}<span>{String(item.id === 'all' ? feed.length : circles.find(entry => entry.id === item.id)?.photo_count ?? 0).padStart(2, '0')}</span></button>)}<button className="circle-tab circle-tab-more" onClick={onBrowseCircles}>发现大圈<span>◎</span></button></div>
+    {feed.length === 0 ? <div className="empty-state"><span>◌</span><h2>圈子还在等第一张照片</h2><p>释放今天的一个瞬间，朋友会在这里遇见它。</p></div> : <div className="post-stream">{feed.map((item, index) => <div className="post-cell" key={item.id} style={{ animationDelay: `${Math.min(index, 6) * 70}ms` }}><PostCard item={item} burst={heartBurst === item.id} onReact={() => onReact(item)} onPoke={() => onPoke(item)} onHeartBurst={() => onHeartBurst(item)} onDelete={() => onDelete(item)} /></div>)}</div>}
+    {hasMore
+      ? <div className="feed-sentinel" ref={sentinelRef}>{loadingMore ? <span className="feed-loading"><span aria-hidden="true">✦</span>正在翻出更早的照片…</span> : <button className="load-more-button" onClick={onLoadMore}>载入更早的照片</button>}</div>
+      : feed.length > 0 && <div className="feed-footer"><span>—</span> 今天的在场，到这里刚刚好 <span>—</span></div>}
   </section>
+}
+
+function PostCard({ item, burst, onReact, onPoke, onHeartBurst, onDelete }: { item: FeedItem; burst: boolean; onReact: () => void; onPoke: () => void; onHeartBurst: () => void; onDelete: () => void }) {
+  const liked = (item.my_reactions ?? []).includes('heart')
+  const frameRef = useRef<HTMLDivElement>(null)
+
+  function burstStars() {
+    if (!reducedMotion()) spawnStarsAt(frameRef.current)
+    onHeartBurst()
+  }
+
+  return <article className="post-card">
+    <div className="post-head">
+      <div className="mini-avatar">{item.author.display_name.slice(0, 1)}</div>
+      <div className="post-id"><b>{item.author.display_name}</b><span className="post-time">{formatTime(item.created_at)}</span></div>
+      {item.circle_id ? <span className="post-circle"><span aria-hidden="true">◎</span>{item.circle}</span> : null}
+      <button className="more-button" aria-label="更多操作">···</button>
+    </div>
+    <div className="post-frame" ref={frameRef} onDoubleClick={burstStars}>
+      <ProtectedImage src={item.image_url} alt={item.caption ?? '朋友分享的照片'} />
+      <span className="photo-type">{item.filter_id === 'film' ? 'CCD' : item.filter_id === 'template' ? 'TEMPLATE' : 'PHOTO'}</span>
+      {burst && <span className="heart-burst" aria-hidden="true">✦</span>}
+    </div>
+    <div className="post-actions">
+      <button className={liked ? 'reaction active' : 'reaction'} onClick={onReact}><span>✦</span>{item.reactions.heart ?? 0}</button>
+      <button className="reaction poke" onClick={onPoke}><span>⌁</span>拍一拍</button>
+      {item.mine && <button className="delete-link" onClick={onDelete}>移除</button>}
+    </div>
+    <p className="post-caption"><b>{item.author.display_name}</b>{item.caption ?? '今天也好好在场。'}</p>
+  </article>
 }
 
 function CirclesView({ circles, onCircles, onToast, onOpenCircle, onReact, onPoke, onHeartBurst, heartBurst, onDelete }: { circles: CircleInfo[]; onCircles: (circles: CircleInfo[]) => void; onToast: (message: string) => void; onOpenCircle: (circleId: string) => void; onReact: (item: FeedItem) => void; onPoke: (item: FeedItem) => void; onHeartBurst: (item: FeedItem) => void; heartBurst: string | null; onDelete: (item: FeedItem) => void }) {

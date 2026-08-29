@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAiJob, createCircle, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCircleFeed, getCircles, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFriendRequests, getFriends, getMessages, getPairStatus, joinCircle, leaveCircle, loginAccount, logoutAccount, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, registerAccount, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
+import { createAiJob, createCircle, deviceAck, deviceHeartbeat, filterFeedByCircle, getAiJob, getCircleFeed, getCircles, getCurrentUser, getDeviceFeed, getDeviceState, getDeviceStateForToken, getFeed, getFeedPage, getFriendRequests, getFriends, getMessages, getPairStatus, joinCircle, leaveCircle, loginAccount, logoutAccount, pokePhoto, publishAiJob, pushDeviceConfig, reactToPhoto, registerAccount, sendMessage, uploadDevicePhoto, uploadPhoto } from './api.js'
 import { clearUserToken, setUserToken } from './user-session.js'
 
 test('current user helper reads the authenticated profile and friend code', async () => {
@@ -220,6 +220,38 @@ test('AI publish helper sends the owner caption and circle', async () => {
     const result = await publishAiJob('job_1', { caption: '两份在场', circle: '小圈' })
     assert.equal(result.photo_id, 'p_ai_published')
     assert.deepEqual(request, { url: '/v1/ai/jobs/job_1/publish', method: 'POST', authorization: 'Bearer demo-token', body: JSON.stringify({ caption: '两份在场', circle: '小圈' }) })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('feed page helper forwards circle and cursor params and returns next_cursor', async () => {
+  const originalFetch = globalThis.fetch
+  const requests: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requests.push(String(input))
+    return new Response(JSON.stringify({ items: [{ photo_id: 'p_page_1', author: { username: 'momo', display_name: '墨墨' }, filter_id: 'warm', image_url: '/v1/photos/p_page_1/image', reactions: {} }], next_cursor: 'cursor-2' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    const first = await getFeedPage()
+    assert.equal(first.items[0].id, 'p_page_1')
+    assert.equal(first.nextCursor, 'cursor-2')
+    await getFeedPage('c_sky', 'cursor-2')
+    assert.deepEqual(requests, ['/v1/feed?limit=8', '/v1/feed?limit=8&circle_id=c_sky&cursor=cursor-2'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('feed page helper never falls back to demo data when a cursor is set', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => { throw new TypeError('fetch failed') }) as typeof fetch
+  try {
+    const page = await getFeedPage(undefined, 'cursor-x')
+    assert.deepEqual(page, { items: [], nextCursor: null })
+    const firstPage = await getFeedPage()
+    assert.ok(firstPage.items.length > 0)
+    assert.equal(firstPage.nextCursor, null)
   } finally {
     globalThis.fetch = originalFetch
   }

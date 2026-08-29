@@ -163,11 +163,31 @@ export async function getFeed(circleId?: string): Promise<FeedItem[]> {
   try {
     const query = circleId && circleId !== 'all' ? `&circle_id=${encodeURIComponent(circleId)}` : ''
     const data = await request<{ items?: FeedItem[] }>(`/feed?limit=20${query}`, { cache: 'no-store' })
-    return (data.items ?? []).map(item => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoAssetByPhotoId[item.photo_id] ?? item.image_url } : { ...item, id: item.photo_id ?? item.id })
+    return mapFeedItems(data.items ?? [])
   } catch (error) {
     const circleName = circleId ? circlesByIdFallback[circleId] : undefined
     return offlineFallback(error, () => circleName ? demoFeed.filter(item => item.circle === circleName) : demoFeed)
   }
+}
+
+export type FeedPage = { items: FeedItem[]; nextCursor: string | null }
+
+export async function getFeedPage(circleId?: string, cursor?: string): Promise<FeedPage> {
+  const circleQuery = circleId && circleId !== 'all' ? `&circle_id=${encodeURIComponent(circleId)}` : ''
+  const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+  try {
+    const data = await request<{ items?: FeedItem[]; next_cursor?: string | null }>(`/feed?limit=8${circleQuery}${cursorQuery}`, { cache: 'no-store' })
+    return { items: mapFeedItems(data.items ?? []), nextCursor: data.next_cursor ?? null }
+  } catch (error) {
+    if (cursor) return { items: [], nextCursor: null }
+    const circleName = circleId ? circlesByIdFallback[circleId] : undefined
+    const items = offlineFallback(error, () => circleName ? demoFeed.filter(item => item.circle === circleName) : demoFeed)
+    return { items, nextCursor: null }
+  }
+}
+
+function mapFeedItems(items: FeedItem[]): FeedItem[] {
+  return items.map(item => item.photo_id?.startsWith('p_demo_') ? { ...item, id: item.photo_id, image_url: demoAssetByPhotoId[item.photo_id] ?? item.image_url } : { ...item, id: item.photo_id ?? item.id })
 }
 
 const circlesByIdFallback: Record<string, string> = { c_small: '小圈', c_sky: '傍晚的天空', c_film: '胶片味', c_desk: '宿舍窗台' }

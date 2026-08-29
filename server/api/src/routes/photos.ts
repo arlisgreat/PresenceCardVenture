@@ -108,9 +108,24 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     const photos = circleIdFilter
       ? (circleIdFilter === 'c_small' ? base.filter(p => !p.circleId) : base.filter(p => p.circleId === circleIdFilter))
       : circleFilter ? base.filter(p => p.circle === circleFilter) : base
-    const etag = `W/\"feed-${u.id}-${circleIdFilter ?? circleFilter ?? 'all'}-${isDevice ? 'dev' : 'web'}-${photos.map(p => p.id).join('-')}\"`
+    const rawCursor = (r.query as any)?.cursor ? String((r.query as any).cursor) : undefined
+    let start = 0
+    if (rawCursor) {
+      const cursor = decodeCursor(rawCursor)
+      if (!cursor) return reply.code(400).send(errorBody('BAD_REQUEST', 'invalid cursor'))
+      const exact = photos.findIndex(p => p.id === cursor.id)
+      if (exact >= 0) start = exact + 1
+      else {
+        // Cursor photo vanished (deleted between pages): resume at the first strictly-older photo.
+        const older = photos.findIndex(p => p.createdAt < cursor.createdAt)
+        start = older === -1 ? photos.length : older
+      }
+    }
+    const page = photos.slice(start, start + limit)
+    const nextCursor = start + limit < photos.length && page.length > 0 ? encodeCursor(page[page.length - 1]) : null
+    const etag = `W/\"feed-${u.id}-${circleIdFilter ?? circleFilter ?? 'all'}-${isDevice ? 'dev' : 'web'}-${rawCursor ?? 'first'}-${photos.map(p => p.id).join('-')}\"`
     if (r.headers['if-none-match'] === etag) return reply.code(304).header('ETag', etag).send()
-    return reply.header('ETag', etag).send({ items: photos.slice(0, limit).map(p => item(p, u.id, store)), next_cursor: null, etag })
+    return reply.header('ETag', etag).send({ items: page.map(p => item(p, u.id, store)), next_cursor: nextCursor, etag })
   }
   app.get('/feed', (r, reply) => feed(r, reply, false)); app.get('/photos/mine', (r, reply) => feed(r, reply, true))
   app.delete('/photos/:id', async (r, reply) => {
@@ -130,6 +145,13 @@ export async function photoRoutes(app: FastifyInstance, opts: { store: DemoStore
     store.photos.delete(p.id)
     return reply.code(204).send()
   })
+}
+function encodeCursor(p: { createdAt: string; id: string }) { return Buffer.from(`${p.createdAt}|${p.id}`, 'utf8').toString('base64url') }
+function decodeCursor(raw: string): { createdAt: string; id: string } | null {
+  const text = Buffer.from(raw, 'base64url').toString('utf8')
+  const sep = text.lastIndexOf('|')
+  if (sep <= 0 || sep === text.length - 1) return null
+  return { createdAt: text.slice(0, sep), id: text.slice(sep + 1) }
 }
 function uploadResult(p: any, store?: DemoStore) { return { photo_id: p.id, url: `/v1/photos/${p.id}/image`, created_at: p.createdAt, daily_remaining: store ? Math.max(0, store.uploadDailyLimit - store.dailyUploadCount(p.authorId, p.deviceId ?? 'web')) : 60 } }
 function item(p: any, uid: string, store: DemoStore) { const author = store.user(p.authorId); const my = Object.keys(store.reactionsFor(p.id)).filter(type => store.reactions.has(`${p.id}:${type}:${uid}`)); return { photo_id: p.id, author: { username: author?.username ?? '', display_name: author?.displayName ?? '' }, filter_id: p.filterId, play_type: p.playType ?? 'ccd', beauty: p.beauty ?? 0, sticker: p.sticker ?? 'none', caption: p.caption, circle: p.circle ?? '小圈', circle_id: p.circleId ?? null, created_at: p.createdAt, width: p.width, height: p.height, image_url: `/v1/photos/${p.id}/image`, reactions: store.reactionsFor(p.id), my_reactions: my, mine: p.authorId === uid } }
