@@ -61,8 +61,8 @@ constexpr uint8_t kBrightnessBoot = 180;
 constexpr uint8_t kBrightnessArrivalLow = 77;    // ~30%: fade-in start
 constexpr uint8_t kBrightnessArrivalFull = 255;  // 100%: arrival peak
 constexpr uint8_t kBrightnessResident = 179;     // ~70%: resident state after TTL
-constexpr uint8_t kBrightnessBrowseDim = 102;    // ~40%: page-turn dip while loading
-constexpr uint32_t kBrowseRampMs = 220;          // ease back up over the fresh frame
+constexpr uint8_t kBrightnessBrowseDim = 0;      // page turn: full black while loading
+constexpr uint32_t kBrowseRampMs = 260;          // then the new photo fades up
 constexpr int16_t kStickerX = 8;
 constexpr int16_t kStickerY = 8;
 constexpr int16_t kStickerHeight = 32;
@@ -93,7 +93,7 @@ constexpr int16_t kStarBufPx = 40;  // save-under square per star (RGB565)
 constexpr uint32_t kSelectorTimeoutMs = 4000;  // auto-cancel when ignored
 constexpr uint32_t kSlideshowIntervalMs = 15000;
 constexpr uint32_t kModeToastMs = 1500;
-constexpr int16_t kCaptionBarHeight = 56;  // "polaroid chin" info bar
+constexpr int16_t kCaptionBarHeight = 64;  // "polaroid chin" info bar
 constexpr int16_t kCaptionBarY = 480 - kCaptionBarHeight;
 
 PresenceDisplay display;
@@ -769,19 +769,23 @@ void drawInfoBar(const String& author, const String& caption,
                             (b * 3 / 4);
   display.fillRect(0, kCaptionBarY, 800, 2, hairline);
   display.setFont(&fonts::efontCN_16);
-  display.setTextSize(1);
   display.setTextColor(textColor, barColor);
   const int16_t midY = kCaptionBarY + kCaptionBarHeight / 2 + 1;
   if (caption.length()) {
+    // Caption is the hero line: 32px, centered; author/index stay 16px sides.
+    display.setTextSize(2);
     String text = caption;
     bool trimmed = false;
-    while (text.length() && display.textWidth(text) > 540) {
+    while (text.length() && display.textWidth(text) > 500) {
       text.remove(text.length() - 1);
       trimmed = true;
     }
     if (trimmed) text += "…";
     display.setTextDatum(lgfx::textdatum_t::middle_center);
     display.drawString(text, 400, midY);
+    display.setTextSize(1);
+  } else {
+    display.setTextSize(1);
   }
   if (author.length()) {
     display.fillCircle(20, midY, 4, kPink);
@@ -1338,13 +1342,9 @@ void pollTouchGestures() {
     if (!longPressFired && now - touchDownAt >= kLongPressMs &&
         abs(x - touchDownX) < kTapMaxMovePx &&
         abs(y - touchDownY) < kTapMaxMovePx) {
-      longPressFired = true;
-      Serial.printf("GESTURE LONG_PRESS x=%d y=%d\n", touchDownX, touchDownY);
-      if (sleeping) {
-        queueGesture(GestureEvent::LONG_PRESS, touchDownX, touchDownY);
-      } else if (!selectorOpen) {
-        openSelector();
-      }
+      longPressFired = true;  // 最简手势集: 长按吞掉不做事 (模式盘已砍)
+      Serial.printf("GESTURE LONG_PRESS x=%d y=%d (ignored)\n", touchDownX,
+                    touchDownY);
     }
     return;
   }
