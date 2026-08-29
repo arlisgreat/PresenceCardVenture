@@ -22,7 +22,10 @@
 
 static const char *TAG = "pvc_power";
 
-#define IDLE_SLEEP_MS    60000               /* §6: 无操作 60s 入睡 */
+#ifndef PVC_IDLE_SLEEP_MS
+#define PVC_IDLE_SLEEP_MS 60000              /* §6: 无操作 60s 入睡 */
+#endif
+#define IDLE_SLEEP_MS    PVC_IDLE_SLEEP_MS
 #define DRAIN_GRACE_MS   60000               /* 在线未同步完: 最多再等 60s */
 #define SLEEP_PERIOD_US  (5ULL * 60 * 1000000)  /* §6: 5-15 分钟, 取 5 分钟 */
 #define QUIET_MIN_MS     8000                /* 静默唤醒至少在线 8s 让联网任务起跑 */

@@ -10,11 +10,12 @@
 ```bash
 cd firmware
 pio run -e cores3              # 编译
-pio run -e cores3 -t erase     # ⚠️ 首次烧录必须全擦: 本工程用自定义分区表,
-                               #    旧布局残留的 NVS/OTA 数据会导致启动异常
 pio run -e cores3 -t upload    # 烧录 (USB-C, 必要时长按 RST 3 秒进下载模式)
 pio device monitor -b 115200   # 串口日志
 ```
+
+不要默认执行全盘擦除。分区布局变化时，先备份，再以本次构建生成的
+`flash_args` 为准，单独初始化 NVS、OTA data、PHY 和应用分区。
 
 BLE 配网手机端:App Store / Google Play 搜索 **"ESP BLE Provisioning"**
 (Espressif 官方),或用串口打印的 QR JSON 扫码直连。
@@ -25,6 +26,7 @@ BLE 配网手机端:App Store / Google Play 搜索 **"ESP BLE Provisioning"**
 联网配置在 [platformio.ini](platformio.ini) build_flags:
 
 - `PVC_API_BASE` — API 环境(dev/prod 按构建目标区分)
+- `PVC_WEB_BASE` — 配对二维码指向的 Web 地址
 - `PVC_WIFI_SSID` / `PVC_WIFI_PASS` — 留空走 BLE 配网;填写则为开发直连后门
 
 > 改过 `sdkconfig.defaults` 后需删除生成的 `sdkconfig.cores3` 再编译。
