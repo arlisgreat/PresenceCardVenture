@@ -140,11 +140,111 @@ void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
                            uint32_t dw, uint32_t dh, const hw2d_filter_t *f);
 
 /* ------------------------------------------------------------------ */
+/* YUV422 (YCbYCr packed) 算子 —— 全链路 YUV 架构                       */
+/*   采集/滤镜/磨皮/编码全程留在传感器原生 YUV 域 (零 RGB565 量化损失), */
+/*   RGB565 仅作为显示边界。字节序: Y0 Cb Y1 Cr (GC0308 寄存器注释 =    */
+/*   esp_new_jpeg 的 JPEG_PIXEL_FORMAT_YCbYCr, 直通编码器)。            */
+/*   约定: npix 为像素数且必须为偶数 (两像素共享一组色度)。             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * YUV 域滤镜查表 (调用方持有, 消除跨核共享静态表竞争):
+ *   y[]  承载 亮度偏置+对比度+综合增益; cb[]/cr[] 承载 饱和度缩放+色调偏移
+ *   (暖/冷调由 gain_r/gain_b 差值映射为 Cr/Cb 偏移)。sat=0 时 cb/cr 恒 128。
+ */
+typedef struct {
+    uint8_t y[256];
+    uint8_t cb[256];
+    uint8_t cr[256];
+    hw2d_filter_t cached;    /* 参数快照, hw2d_yuv_build_luts 按需重建 */
+    bool valid;
+} hw2d_yuv_luts_t;
+
+/* 按 f 重建 luts (与 cached 相同则跳过); luts 由调用方零初始化 */
+void hw2d_yuv_build_luts(const hw2d_filter_t *f, hw2d_yuv_luts_t *luts);
+
+/* YUYV -> YUYV 滤镜 (拍照链); dst 可等于 src (原地) */
+void hw2d_yuv_filter(uint8_t *dst, const uint8_t *src, uint32_t npix,
+                     const hw2d_yuv_luts_t *luts);
+
+/* YUYV -> RGB565(LE) 滤镜+转换融合单遍 (预览显示边界; BT.601 全范围) */
+void hw2d_yuv_filter_rgb565(uint16_t *dst, const uint8_t *src, uint32_t npix,
+                            const hw2d_yuv_luts_t *luts);
+void hw2d_yuv_filter_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t npix, const hw2d_yuv_luts_t *luts);
+
+/* 反向写出变体: 输出即 180 度旋转 (GC0308 CISCTL 翻转位真机写不进,
+ * 装配方向由软件补偿; 预览零额外遍历) */
+void hw2d_yuv_filter_rgb565_rot180(uint16_t *dst, const uint8_t *src,
+                                   uint32_t npix, const hw2d_yuv_luts_t *luts);
+void hw2d_yuv_filter_rgb565_rot180_stat(uint16_t *dst, const uint8_t *src,
+                                        uint32_t npix,
+                                        const hw2d_yuv_luts_t *luts);
+
+/* YUYV422 原地 180 度旋转 (拍照链: 快照进 worker 先转再处理, ~2ms) */
+void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix);
+
+/* 色度降噪: Cb/Cr 各 1-2-1 水平平滑 (传感器低光彩点/绿噪点; Y 不动) */
+void hw2d_yuv_chroma_smooth(uint8_t *yuyv, uint32_t w, uint32_t h);
+
+/*
+ * 预览终极融合: 装配 180 度 + (可选)自拍镜像 + 色度降噪 + 滤镜 + RGB565,
+ * 单遍。mirror=1 时 rot180∘hmirror = 纯垂直翻转 (行倒序行内正序, 全顺序
+ * 访存); mirror=0 纯 rot180。不修改源帧 (色度平滑在扫描中完成)。
+ * 内部行缓冲 (PSRAM 仅两次整行突发); 仅限单任务 (预览/LVGL) 调用;
+ * 行宽上限 HW2D_RENDER_MAX_W。
+ */
+#define HW2D_RENDER_MAX_W 320
+void hw2d_yuv_render_rgb565(uint16_t *dst, const uint8_t *src,
+                            uint32_t w, uint32_t h,
+                            const hw2d_yuv_luts_t *luts, bool mirror);
+void hw2d_yuv_render_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t w, uint32_t h,
+                                 const hw2d_yuv_luts_t *luts, bool mirror);
+
+/* 自拍镜像: RGB565 预览与 YUYV422 成片均按行水平翻转; 调用两次恢复原图。 */
+void hw2d_rgb565_hmirror(uint16_t *rgb, uint32_t w, uint32_t h);
+void hw2d_yuv_hmirror(uint8_t *yuyv, uint32_t w, uint32_t h);
+
+/* YUYV 磨皮: 仅 3x3 平滑 Y 平面 (经典磨皮: 平亮度保色度, 算量 1/3)。
+ * dst 可等于 src; 内部借用 blur 平面缓冲 (单任务调用, 与 blur3x3 互斥) */
+void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,
+                     uint8_t strength);
+
+/* YUYV 提亮混合圆 (贴纸合成进照片): 圆内 Y 向 255、色度向 128 按 alpha 靠拢;
+ * 圆心/半径超出画面时整圆裁剪 */
+void hw2d_yuv_blend_circle(uint8_t *yuyv, uint32_t w, uint32_t h,
+                           int cx, int cy, int r, uint8_t alpha);
+
+/* YUYV 提取 Y 平面 (人脸检测 GRAY 输入等) */
+void hw2d_yuv_extract_y(uint8_t *dst_gray, const uint8_t *src, uint32_t npix);
+
+/* ------------------------------------------------------------------ */
+/* CCD 机型滤镜 (拍照链专用, 全保真路径)                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 三维 LUT 调色 (原地): 逐像素 YUV->RGB (BT.601) -> N^3 三线性查表
+ * -> RGB->YUV 写回。lut 为 [b][g][r][rgb] 序 RGB888, 每轴 n 采样。
+ * QVGA 约 100-200ms, 仅在 worker 拍照链使用 (预览走 1D 近似参数)。
+ */
+void hw2d_yuv_3dlut(uint8_t *yuyv, uint32_t npix, const uint8_t *lut, int n);
+
+/* 胶片颗粒 (原地, 仅加于 Y): amount=噪声峰值, highlights=亮部权重 0-100,
+ * seed 决定颗粒图案 (同 seed 可复现) */
+void hw2d_yuv_grain(uint8_t *yuyv, uint32_t w, uint32_t h,
+                    uint8_t amount, uint8_t highlights, uint32_t seed);
+
+/* 暗角 (原地, 仅衰减 Y): strength 0-100, 边角处 Y 衰减至 (100-strength)% */
+void hw2d_yuv_vignette(uint8_t *yuyv, uint32_t w, uint32_t h, uint8_t strength);
+
+/* ------------------------------------------------------------------ */
 /* 16bit 车道字节交换 (RGB565 小端 <-> 大端)                            */
 /* ------------------------------------------------------------------ */
 
 /*
- * dst[i] = byteswap16(src[i])。src/dst 必须分离。
+ * dst[i] = byteswap16(src[i])。允许 dst==src 原地转换
+ * (各路径均为读后写同址); 部分重叠不允许。
  * ESP32-S3 上若 PIE 128-bit 路径可用 (开机自测通过) 且两缓冲 16 字节对齐,
  * 走 PIE 汇编 (8 像素/拍); 否则 64bit 掩码路径 (4 像素/次)。
  */

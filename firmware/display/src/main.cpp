@@ -36,13 +36,65 @@ constexpr size_t kMaxJpegBytes = 160 * 1024;
 constexpr size_t kMinPsramBytes = 7 * 1024 * 1024;
 constexpr uint16_t kExpectedJpegWidth = 320;
 constexpr uint16_t kExpectedJpegHeight = 240;
+// A single 401 no longer wipes the binding (transient server bugs used to
+// cause self-unbinding loops). Only this many *consecutive* 401s, with no
+// successful request in between, prove the token is really dead.
+constexpr uint8_t kAuthFailureLimit = 5;
 
-constexpr uint32_t kBackground = 0xFBF9F7;
+// Design tokens from the UI spec (Presence小卡-屏幕UI与交互量化设计规范).
+constexpr uint32_t kBackground = 0xFDFBF5;  // paper_white
 constexpr uint32_t kInk = 0x242529;
 constexpr uint32_t kMuted = 0x74777D;
-constexpr uint32_t kPink = 0xF7DCE5;
-constexpr uint32_t kBlue = 0xDCE9F5;
-constexpr uint32_t kSage = 0xDDE8DE;
+constexpr uint32_t kPink = 0xF7A8C8;   // candy_pink: like highlight, pair success
+constexpr uint32_t kBlue = 0x2F7DE0;   // accent_sky_blue: pair code, timestamps
+constexpr uint32_t kSage = 0x3E7A3A;   // grass_green: pairing/settings panels
+constexpr uint32_t kLilac = 0xC7B8EE;  // lilac_purple: arrival nickname sticker
+constexpr uint32_t kNight = 0x1A1D1A;  // dark_night: chrome + selector backdrop
+constexpr uint32_t kShadow = 0x0A0C0A; // hard drop shadow under paper cards
+
+// Arrival ritual (photo-arrival ceremony). A full-screen alpha blend would not
+// fit the PSRAM bandwidth budget, so the fade rides the backlight PWM instead.
+constexpr uint32_t kArrivalTtlMs = 20000;    // photo stays full-screen 20 s
+constexpr uint32_t kArrivalFadeMs = 500;     // backlight ramp in/out
+constexpr uint32_t kBrightnessTickMs = 25;   // loop cadence for PWM updates
+constexpr uint8_t kBrightnessBoot = 180;
+constexpr uint8_t kBrightnessArrivalLow = 77;    // ~30%: fade-in start
+constexpr uint8_t kBrightnessArrivalFull = 255;  // 100%: arrival peak
+constexpr uint8_t kBrightnessResident = 179;     // ~70%: resident state after TTL
+constexpr uint8_t kBrightnessBrowseDim = 102;    // ~40%: page-turn dip while loading
+constexpr uint32_t kBrowseRampMs = 220;          // ease back up over the fresh frame
+constexpr int16_t kStickerX = 8;
+constexpr int16_t kStickerY = 8;
+constexpr int16_t kStickerHeight = 32;
+constexpr int16_t kStickerMaxWidth = 300;
+// 320x240 -> 800x600, then crop 60 px from the scaled top and bottom. This
+// fills the 800x480 panel without stretching the photo.
+constexpr float kCoverScale = 2.5f;
+constexpr int kScaledVerticalCrop = 60;
+
+// ---- Touch gesture engine (GT911) ------------------------------------------
+// Non-blocking state machine fed by getTouch() polling in loop(). It only
+// *emits* events; consumers (carousel = SWIPE_LEFT/RIGHT, screen-off =
+// SWIPE_UP, settings = LONG_PRESS) pop them via nextGestureEvent().
+constexpr uint32_t kStarYellow = 0xF5D76E;  // cream_yellow: like star burst
+constexpr int kTapMaxMovePx = 5;          // tap: displacement below this
+constexpr uint32_t kTapMaxMs = 250;       // tap: press shorter than this
+constexpr uint32_t kMultiTapGapMs = 300;  // taps closer than this are a chain
+constexpr int kSwipeMinMovePx = 40;       // swipe: displacement above this
+constexpr uint32_t kSwipeMaxMs = 400;     // swipe: press shorter than this
+constexpr uint32_t kLongPressMs = 1500;   // long press: hold at least this
+constexpr uint32_t kLikeWindowMs = 2000;  // like aggregation silence window
+constexpr uint8_t kGestureQueueSize = 8;
+constexpr uint32_t kStarLifetimeMs = 1000;
+constexpr uint8_t kMaxStars = 8;  // ring buffer of simultaneous particles
+constexpr int16_t kStarBufPx = 40;  // save-under square per star (RGB565)
+
+// ---- Display modes (long-press selector) + info bar --------------------------
+constexpr uint32_t kSelectorTimeoutMs = 4000;  // auto-cancel when ignored
+constexpr uint32_t kSlideshowIntervalMs = 15000;
+constexpr uint32_t kModeToastMs = 1500;
+constexpr int16_t kCaptionBarHeight = 56;  // "polaroid chin" info bar
+constexpr int16_t kCaptionBarY = 480 - kCaptionBarHeight;
 
 PresenceDisplay display;
 Preferences preferences;
@@ -62,6 +114,114 @@ uint32_t nextPairActionAt = 0;
 uint32_t nextCloudPollAt = 0;
 uint32_t nextWifiAttemptAt = 0;
 uint32_t nextTimeAttemptAt = 0;
+uint8_t consecutiveAuthFailures = 0;
+
+// Arrival ritual state machine (all timing is millis()-based, non-blocking).
+enum class ArrivalPhase : uint8_t { Idle, FadeIn, Hold, FadeOut };
+ArrivalPhase arrivalPhase = ArrivalPhase::Idle;
+uint32_t arrivalShownAt = 0;             // millis() when the photo hit the screen
+uint32_t arrivalPhaseStartedAt = 0;      // millis() when the current fade began
+uint32_t arrivalLastBrightnessTickAt = 0;
+uint8_t* shownJpeg = nullptr;            // JPEG of the photo currently on screen,
+size_t shownJpegSize = 0;                // retained in PSRAM for overlay cleanup
+int16_t arrivalStickerWidth = 0;         // actual sticker width for the repaint clip
+bool arrivalCaptionShown = false;        // caption bar needs cleanup at TTL end
+
+// ---- Gesture engine state ---------------------------------------------------
+enum class GestureEvent : uint8_t {
+  NONE = 0,
+  TAP,
+  SWIPE_LEFT,
+  SWIPE_RIGHT,
+  SWIPE_UP,
+  SWIPE_DOWN,
+  LONG_PRESS,
+};
+
+struct QueuedGesture {
+  GestureEvent event = GestureEvent::NONE;
+  int16_t x = 0;
+  int16_t y = 0;
+};
+
+QueuedGesture gestureQueue[kGestureQueueSize];
+uint8_t gestureQueueHead = 0;  // next slot to read
+uint8_t gestureQueueTail = 0;  // next slot to write
+
+bool touchHeld = false;
+bool longPressFired = false;
+int16_t touchDownX = 0;
+int16_t touchDownY = 0;
+int16_t touchLastX = 0;
+int16_t touchLastY = 0;
+uint32_t touchDownAt = 0;
+
+uint8_t pendingLikeTaps = 0;
+uint32_t lastLikeTapAt = 0;
+uint8_t likeTapChain = 0;  // consecutive taps within kMultiTapGapMs, for logs
+
+struct StarParticle {
+  bool active = false;
+  int16_t x = 0;
+  int16_t y = 0;
+  uint32_t startedAt = 0;
+  uint8_t lastStep = 255;
+  // Save-under state: pixels beneath the previous frame, restored each step so
+  // expired stars leave no trace on the photo.
+  int16_t savedX = 0;
+  int16_t savedY = 0;
+  int16_t savedW = 0;
+  int16_t savedH = 0;
+  uint16_t* saved = nullptr;  // kStarBufPx^2 RGB565 buffer, lazily in PSRAM
+};
+
+StarParticle stars[kMaxStars];
+uint8_t starWriteIndex = 0;
+
+// ---- Carousel (multi-photo feed) state ---------------------------------------
+// Only metadata is cached; JPEGs are downloaded on demand for the card being
+// shown (PSRAM cannot hold five JPEGs plus the framebuffer comfortably).
+constexpr size_t kFeedLimit = 5;
+struct FeedPhoto {
+  String photoId;
+  String imageUrl;
+  String author;
+  String caption;
+};
+FeedPhoto feedPhotos[kFeedLimit];
+size_t feedCount = 0;
+size_t currentPhotoIndex = 0;  // 0 = newest
+
+// ---- Display modes (long-press selector) -------------------------------------
+// Latest: new arrivals take over (default). Resident: pinned photo returns
+// after each arrival ritual. Slideshow: auto-advance through the feed.
+enum class DisplayMode : uint8_t { Latest = 0, Resident = 1, Slideshow = 2 };
+DisplayMode displayMode = DisplayMode::Latest;
+String residentPhotoId;  // pinned photo while in Resident mode
+bool selectorOpen = false;
+uint32_t selectorOpenedAt = 0;
+uint32_t nextSlideAt = 0;
+bool modeToastActive = false;
+uint32_t modeToastUntil = 0;
+
+// ---- Sleep mode + generic backlight ramp state -------------------------------
+// startBacklightRamp()/updateBacklightRamp() below are generic and shared;
+// other workstreams can reuse them instead of a custom brightness ticker.
+constexpr uint32_t kSleepRampMs = 800;  // ease-in dim to 0 on SWIPE_UP
+constexpr uint32_t kWakeRampMs = 500;   // ease-out back up on wake tap
+bool sleeping = false;
+uint8_t missedWhileSleeping = 0;
+uint8_t currentBrightness = kBrightnessBoot;
+bool blRampActive = false;
+bool blRampEaseIn = false;
+uint8_t blRampFrom = 0;
+uint8_t blRampTo = 0;
+uint32_t blRampStartMs = 0;
+uint32_t blRampDurationMs = 1;
+// Multi-consumer-safe read cursor into gestureQueue: carousel/sleep tracks its
+// own cursor instead of popping the shared head, so the like/star consumer
+// still sees TAP events. Queue overflow discipline stays with the engine owner.
+uint8_t carouselGestureCursor = 0;
 
 struct HttpResponse {
   int code = -1;
@@ -205,54 +365,134 @@ String imageUrl(const String& value) {
   return resolved;
 }
 
-void drawChrome() {
+// ---- "Handmade polaroid" chrome ---------------------------------------------
+// The pairing / status screen is the first thing a new owner sees, so it gets
+// the full design language: dark_night backdrop, one paper card with a hard
+// drop shadow, slanted washi-tape corners, and the 6-digit code as the hero.
+
+// Slanted parallelogram strip — the cheap stand-in for a rotated tape sticker.
+void drawWashiTape(int16_t x, int16_t y, int16_t w, int16_t h, uint32_t color) {
+  const int16_t slant = h / 2;
+  display.fillTriangle(x + slant, y, x + w, y, x, y + h, color);
+  display.fillTriangle(x + w, y, x + w - slant, y + h, x, y + h, color);
+}
+
+// Small six-point star (two overlapped triangles), used as an accent glyph.
+void drawStarGlyph(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
+  display.fillTriangle(cx, cy - r, cx - r, cy + r / 2, cx + r, cy + r / 2, color);
+  display.fillTriangle(cx, cy + r, cx - r, cy - r / 2, cx + r, cy - r / 2, color);
+}
+
+// Forces the next drawChrome() to repaint the whole screen (statics below
+// otherwise limit the 3 s poll cadence to a status-strip refresh).
+String chromeStateShown = "\x01";
+
+void drawChromeStatusStrip() {
   display.startWrite();
-  display.fillRect(0, 0, 800, 82, kBackground);
-  display.fillRect(0, 420, 800, 60, kBackground);
-  display.fillRect(0, 80, 800, 2, kPink);
-  display.fillRect(0, 420, 800, 2, kBlue);
-
-  display.setTextColor(kInk, kBackground);
-  display.setTextDatum(lgfx::textdatum_t::top_left);
-  display.setTextFont(2);
+  display.fillRect(140, 150, 520, 28, kBackground);
+  display.setFont(&fonts::efontCN_16);
   display.setTextSize(1);
-  display.drawString("PresenceCard Display", 24, 14);
-
+  display.setTextDatum(lgfx::textdatum_t::middle_center);
   display.setTextColor(kMuted, kBackground);
-  display.drawString(deviceId.length() ? deviceId : "dvc_pending", 24, 46);
-
-  display.setTextDatum(lgfx::textdatum_t::top_right);
-  display.setTextColor(kInk, kBackground);
-  display.drawString(statusText, 776, 14);
-  display.setTextColor(kMuted, kBackground);
-  display.drawString(statusDetail, 776, 46);
-
-  display.setTextDatum(lgfx::textdatum_t::middle_left);
-  display.setTextColor(kMuted, kBackground);
-  display.drawString("PAIR", 24, 450);
-  display.setTextColor(kInk, kBackground);
-  display.setTextSize(2);
-  display.drawString(pairCode.length() == 6 ? pairCode : (token.length() ? "PAIRED" : "------"),
-                     92, 450);
-  display.setTextSize(1);
+  String line = statusText;
+  if (statusDetail.length()) {
+    line += "  ·  ";
+    line += statusDetail;
+  }
+  while (line.length() && display.textWidth(line) > 500) {
+    line.remove(line.length() - 1);
+  }
+  display.drawString(line, 400, 164);
   display.endWrite();
+}
+
+void drawChrome() {
+  const String state =
+      token.length() ? String("bound")
+                     : (pairCode.length() == 6 ? pairCode : String("waiting"));
+  if (state == chromeStateShown) {  // only the status text changed
+    drawChromeStatusStrip();
+    return;
+  }
+  chromeStateShown = state;
+
+  display.startWrite();
+  display.fillScreen(kNight);
+  // Paper card with a hard shadow.
+  display.fillRoundRect(102, 64, 608, 368, 24, kShadow);
+  display.fillRoundRect(96, 56, 608, 368, 24, kBackground);
+  // Washi tape over the two top corners of the card.
+  drawWashiTape(140, 44, 96, 26, kLilac);
+  drawWashiTape(556, 44, 96, 26, kPink);
+
+  display.setFont(&fonts::efontCN_16);
+  display.setTextDatum(lgfx::textdatum_t::middle_center);
+  display.setTextSize(2);
+  display.setTextColor(kInk, kBackground);
+  display.drawString("Presence 相框", 400, 112);
+  drawStarGlyph(268, 112, 8, kStarYellow);
+  drawStarGlyph(532, 112, 8, kStarYellow);
+
+  if (token.length()) {
+    // Bound: green check medallion instead of the code boxes.
+    display.fillCircle(400, 240, 40, kSage);
+    display.fillCircle(400, 240, 34, kBackground);
+    display.fillCircle(400, 240, 28, kSage);
+    // Chunky check mark from two thick strokes.
+    for (int i = -2; i <= 2; ++i) {
+      display.drawLine(384, 240 + i, 396, 252 + i, kBackground);
+      display.drawLine(396, 252 + i, 418, 228 + i, kBackground);
+    }
+    display.setTextSize(1);
+    display.setTextColor(kInk, kBackground);
+    display.drawString("已绑定 · 照片正在路上", 400, 316);
+  } else {
+    // Six digit boxes, the hero of the screen.
+    const int16_t boxW = 74, boxH = 96, gap = 12;
+    const int16_t x0 = (800 - (6 * boxW + 5 * gap)) / 2;
+    for (int i = 0; i < 6; ++i) {
+      const int16_t bx = x0 + i * (boxW + gap);
+      display.fillRoundRect(bx, 196, boxW, boxH, 10, kNight);
+      if (pairCode.length() == 6) {
+        display.setTextSize(4);
+        display.setTextColor(kBackground, kNight);
+        display.drawString(String(pairCode[i]), bx + boxW / 2, 196 + boxH / 2);
+      } else {
+        display.fillCircle(bx + boxW / 2, 196 + boxH / 2, 5, kMuted);
+      }
+    }
+    display.setTextSize(1);
+    display.setTextColor(kMuted, kBackground);
+    display.drawString("打开 App · 添加设备 · 输入这串配对码", 400, 326);
+  }
+
+  // Hairline + device id footer inside the card.
+  display.fillRect(140, 372, 520, 2, 0xE8E4DA);
+  display.setTextSize(1);
+  display.setTextColor(kMuted, kBackground);
+  display.drawString(deviceId.length() ? deviceId : "dvc_pending", 400, 398);
+  display.endWrite();
+
+  drawChromeStatusStrip();
 }
 
 void showPanelMessage(const String& title, const String& detail,
                       uint32_t accent = kPink) {
+  chromeStateShown = "\x01";  // next drawChrome() repaints from scratch
   display.startWrite();
-  display.fillScreen(kBackground);
-  display.fillRoundRect(120, 135, 560, 210, 24, accent);
+  display.fillScreen(kNight);
+  display.fillRoundRect(126, 156, 548, 188, 24, kShadow);
+  display.fillRoundRect(120, 148, 548, 188, 24, kBackground);
+  drawWashiTape(160, 136, 96, 26, accent);
+  display.setFont(&fonts::efontCN_16);
   display.setTextDatum(lgfx::textdatum_t::middle_center);
-  display.setTextColor(kInk, accent);
-  display.setTextFont(2);
+  display.setTextColor(kInk, kBackground);
   display.setTextSize(2);
-  display.drawString(title, 400, 205);
+  display.drawString(title, 400, 218);
   display.setTextSize(1);
-  display.setTextColor(kMuted, accent);
-  display.drawString(detail, 400, 275);
+  display.setTextColor(kMuted, kBackground);
+  display.drawString(detail, 400, 282);
   display.endWrite();
-  drawChrome();
 }
 
 void setStatus(const String& status, const String& detail = String()) {
@@ -262,6 +502,430 @@ void setStatus(const String& status, const String& detail = String()) {
   // serial and the chrome returns only when pairing/configuration is needed.
   if (!hasRenderedPhoto) drawChrome();
   Serial.printf("STATUS %s %s\n", status.c_str(), detail.c_str());
+}
+
+// ---- Arrival ritual -------------------------------------------------------
+
+// Ease-out approximation of cubic-bezier(0.25, 1, 0.5, 1): cheap 1-(1-t)^2.
+float easeOutQuad(float t) {
+  if (t < 0.0f) t = 0.0f;
+  if (t > 1.0f) t = 1.0f;
+  const float u = 1.0f - t;
+  return 1.0f - u * u;
+}
+
+uint8_t lerpBrightness(uint8_t from, uint8_t to, float t) {
+  const float eased = easeOutQuad(t);
+  return static_cast<uint8_t>(from + (static_cast<int>(to) - from) * eased);
+}
+
+// Nickname sticker at the top-left corner. LovyanGFX cannot rotate small
+// elements cheaply, so the sticker feel comes from a 2 px hard shadow
+// (spec-sanctioned fallback for the -2 degree rotation).
+void drawNameSticker(const String& author) {
+  String label = author.length() ? author : String("friend");
+  display.setFont(&fonts::efontCN_16);  // CJK-capable: friends have Chinese names
+  display.setTextSize(1);
+  int16_t textWidth = display.textWidth(label);
+  int16_t width = textWidth + 16;  // 8 px padding on each side
+  while (width > kStickerMaxWidth && label.length() > 1) {
+    label.remove(label.length() - 1);
+    textWidth = display.textWidth(label);
+    width = textWidth + 16;
+  }
+  arrivalStickerWidth = width;
+
+  display.startWrite();
+  display.fillRoundRect(kStickerX + 2, kStickerY + 2, width, kStickerHeight, 4,
+                        kInk);  // hard shadow
+  display.fillRoundRect(kStickerX, kStickerY, width, kStickerHeight, 4, kLilac);
+  display.drawRoundRect(kStickerX, kStickerY, width, kStickerHeight, 4,
+                        TFT_WHITE);  // 1 px white border
+  display.setTextDatum(lgfx::textdatum_t::middle_left);
+  display.setTextColor(kInk, kLilac);
+  display.drawString(label, kStickerX + 8, kStickerY + kStickerHeight / 2);
+  display.endWrite();
+}
+
+// Backlight entry point that keeps the sleep/ramp bookkeeping in sync;
+// defined below with the sleep-mode helpers.
+void setBacklightNow(uint8_t value);
+
+void freeShownJpeg() {
+  if (shownJpeg != nullptr) {
+    heap_caps_free(shownJpeg);
+    shownJpeg = nullptr;
+    shownJpegSize = 0;
+  }
+}
+
+// Take ownership of a downloaded JPEG as "what is on screen right now". The
+// retained bytes let overlays (sticker, caption bar, selector, toast) be
+// erased by re-decoding just their clip region instead of re-downloading.
+void retainShownJpeg(uint8_t* data, size_t size) {
+  if (shownJpeg == data) return;
+  freeShownJpeg();
+  shownJpeg = data;
+  shownJpegSize = size;
+}
+
+// Abandon any in-flight ritual (binding cleared, next photo takes over).
+void resetArrival(bool restoreBrightness) {
+  arrivalPhase = ArrivalPhase::Idle;
+  arrivalCaptionShown = false;
+  if (restoreBrightness) setBacklightNow(kBrightnessBoot);
+}
+
+// Repaint a rectangle of the screen from the retained JPEG so overlays can be
+// erased without a full redraw or a re-download.
+void repaintRegionFromShown(int16_t x, int16_t y, int16_t w, int16_t h) {
+  if (shownJpeg == nullptr) return;
+  display.startWrite();
+  display.setClipRect(x, y, w, h);
+  display.drawJpg(shownJpeg, shownJpegSize, 0, 0, 800, 480, 0,
+                  kScaledVerticalCrop, kCoverScale, kCoverScale);
+  display.clearClipRect();
+  display.endWrite();
+}
+
+void repaintFullFromShown() {
+  if (shownJpeg == nullptr) return;
+  display.startWrite();
+  display.drawJpg(shownJpeg, shownJpegSize, 0, 0, 800, 480, 0,
+                  kScaledVerticalCrop, kCoverScale, kCoverScale);
+  display.endWrite();
+}
+
+// Repaint only the sticker area from the retained JPEG so the sticker
+// disappears at the end of the TTL while the photo stays on screen.
+void repaintStickerRegion() {
+  if (arrivalStickerWidth <= 0) return;
+  repaintRegionFromShown(kStickerX, kStickerY, arrivalStickerWidth + 3,
+                         kStickerHeight + 3);
+}
+
+// Called once when a new photo is on screen: log the event and start the
+// 500 ms backlight fade-in. Assumes brightness was already dropped low and
+// the sticker drawn.
+void beginArrival(const char* photoId, const char* author) {
+  Serial.printf("STATUS ARRIVAL %s by %s\n", photoId, author);
+  const uint32_t now = millis();
+  arrivalShownAt = now;
+  arrivalPhaseStartedAt = now;
+  arrivalLastBrightnessTickAt = now;
+  arrivalPhase = ArrivalPhase::FadeIn;
+}
+
+// Non-blocking backlight state machine, called from loop().
+void onArrivalRetired();  // defined below the carousel section
+void updateArrival(uint32_t now) {
+  if (arrivalPhase == ArrivalPhase::Idle) return;
+
+  if (arrivalPhase == ArrivalPhase::Hold) {
+    // Fade-out starts 500 ms before the 20 s TTL ends.
+    if (now - arrivalShownAt >= kArrivalTtlMs - kArrivalFadeMs) {
+      arrivalPhase = ArrivalPhase::FadeOut;
+      arrivalPhaseStartedAt = now;
+      arrivalLastBrightnessTickAt = now;
+    }
+    return;
+  }
+
+  if (!timeReached(now, arrivalLastBrightnessTickAt + kBrightnessTickMs)) {
+    return;
+  }
+  arrivalLastBrightnessTickAt = now;
+  const float t =
+      static_cast<float>(now - arrivalPhaseStartedAt) / kArrivalFadeMs;
+
+  if (arrivalPhase == ArrivalPhase::FadeIn) {
+    if (t >= 1.0f) {
+      setBacklightNow(kBrightnessArrivalFull);
+      arrivalPhase = ArrivalPhase::Hold;
+    } else {
+      setBacklightNow(
+          lerpBrightness(kBrightnessArrivalLow, kBrightnessArrivalFull, t));
+    }
+    return;
+  }
+
+  // FadeOut: 100% -> 70% resident level, then retire the ritual.
+  if (t >= 1.0f) {
+    setBacklightNow(kBrightnessResident);
+    repaintStickerRegion();
+    if (arrivalCaptionShown) {
+      repaintRegionFromShown(0, kCaptionBarY, 800, kCaptionBarHeight);
+      arrivalCaptionShown = false;
+    }
+    arrivalPhase = ArrivalPhase::Idle;
+    Serial.println("STATUS ARRIVAL_END");
+    onArrivalRetired();
+  } else {
+    setBacklightNow(
+        lerpBrightness(kBrightnessArrivalFull, kBrightnessResident, t));
+  }
+}
+
+// ---- Generic backlight ramp (sleep/wake; reusable by other workstreams) -----
+// Forward declarations for helpers defined further below in this namespace.
+bool noteAuthFailure(const char* where);
+JpegDownload downloadJpeg(const String& url);
+bool decodeAndDrawJpeg(uint8_t* data, size_t size);
+void onArrivalRetired();
+void carouselShow(size_t index);
+void clearStars();
+
+void setBacklightNow(uint8_t value) {
+  currentBrightness = value;
+  display.setBrightness(value);
+}
+
+void startBacklightRamp(uint8_t target, uint32_t durationMs, bool easeIn) {
+  blRampFrom = currentBrightness;
+  blRampTo = target;
+  blRampStartMs = millis();
+  blRampDurationMs = durationMs ? durationMs : 1;
+  blRampEaseIn = easeIn;
+  blRampActive = true;
+}
+
+void updateBacklightRamp(uint32_t now) {
+  if (!blRampActive) return;
+  const uint32_t elapsed = now - blRampStartMs;
+  if (elapsed >= blRampDurationMs) {
+    blRampActive = false;
+    setBacklightNow(blRampTo);
+    return;
+  }
+  const float t = static_cast<float>(elapsed) / blRampDurationMs;
+  const float p = blRampEaseIn ? t * t : easeOutQuad(t);
+  setBacklightNow(static_cast<uint8_t>(
+      blRampFrom + (static_cast<int>(blRampTo) - blRampFrom) * p));
+}
+
+// ---- Sleep mode --------------------------------------------------------------
+void enterSleep() {
+  if (sleeping) return;
+  sleeping = true;
+  missedWhileSleeping = 0;
+  // An in-flight arrival fade must not fight the dim-to-0 ramp; retire it
+  // (repainting the sticker out first so the wake frame is clean).
+  if (arrivalPhase != ArrivalPhase::Idle) repaintStickerRegion();
+  resetArrival(false);
+  Serial.println("SLEEP ENTER");
+  startBacklightRamp(0, kSleepRampMs, true);
+}
+
+void wakeFromSleep() {
+  if (!sleeping) return;
+  sleeping = false;
+  // Photos that arrived while asleep were already rendered silently onto the
+  // framebuffer, so the newest card is on screen the moment the backlight
+  // comes back.
+  Serial.printf("SLEEP WAKE %u\n", static_cast<unsigned>(missedWhileSleeping));
+  missedWhileSleeping = 0;
+  startBacklightRamp(kBrightnessBoot, kWakeRampMs, false);
+}
+
+// ---- Info bar ("polaroid chin") ----------------------------------------------
+// Bar color comes from the photo itself: average a pixel row near the bottom,
+// then shift its lightness ~30% (spec: derived tint, never plain black/white).
+void drawInfoBar(const String& author, const String& caption,
+                 const String& indexLabel) {
+  static uint16_t row[800];
+  display.readRect(0, kCaptionBarY - 8, 800, 1, row);
+  uint32_t sumR = 0, sumG = 0, sumB = 0;
+  int samples = 0;
+  for (int x = 0; x < 800; x += 16) {
+    const uint16_t c = row[x];
+    sumR += (c >> 11) & 0x1F;
+    sumG += (c >> 5) & 0x3F;
+    sumB += c & 0x1F;
+    ++samples;
+  }
+  uint8_t r = (sumR / samples) << 3;
+  uint8_t g = (sumG / samples) << 2;
+  uint8_t b = (sumB / samples) << 3;
+  const int luminance = (r * 299 + g * 587 + b * 114) / 1000;
+  if (luminance > 140) {  // bright photo edge -> darker chin
+    r = r * 13 / 20;
+    g = g * 13 / 20;
+    b = b * 13 / 20;
+  } else {  // dark edge -> lighter chin
+    r += (255 - r) * 7 / 20;
+    g += (255 - g) * 7 / 20;
+    b += (255 - b) * 7 / 20;
+  }
+  const uint32_t barColor = (static_cast<uint32_t>(r) << 16) |
+                            (static_cast<uint32_t>(g) << 8) | b;
+  const int barLuminance = (r * 299 + g * 587 + b * 114) / 1000;
+  const uint32_t textColor = barLuminance > 128 ? kInk : kBackground;
+
+  display.startWrite();
+  display.fillRect(0, kCaptionBarY, 800, kCaptionBarHeight, barColor);
+  // Hairline separator: the bar color pushed a step darker.
+  const uint32_t hairline = (static_cast<uint32_t>(r * 3 / 4) << 16) |
+                            (static_cast<uint32_t>(g * 3 / 4) << 8) |
+                            (b * 3 / 4);
+  display.fillRect(0, kCaptionBarY, 800, 2, hairline);
+  display.setFont(&fonts::efontCN_16);
+  display.setTextSize(1);
+  display.setTextColor(textColor, barColor);
+  const int16_t midY = kCaptionBarY + kCaptionBarHeight / 2 + 1;
+  if (caption.length()) {
+    String text = caption;
+    bool trimmed = false;
+    while (text.length() && display.textWidth(text) > 540) {
+      text.remove(text.length() - 1);
+      trimmed = true;
+    }
+    if (trimmed) text += "…";
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.drawString(text, 400, midY);
+  }
+  if (author.length()) {
+    display.fillCircle(20, midY, 4, kPink);
+    display.setTextDatum(lgfx::textdatum_t::middle_left);
+    display.drawString(author, 32, midY);
+  }
+  if (indexLabel.length()) {
+    display.setTextDatum(lgfx::textdatum_t::middle_right);
+    display.drawString(indexLabel, 784, midY);
+  }
+  display.endWrite();
+}
+
+const char* modeName(DisplayMode mode) {
+  switch (mode) {
+    case DisplayMode::Resident: return "常驻模式";
+    case DisplayMode::Slideshow: return "轮播模式";
+    default: return "最新模式";
+  }
+}
+
+// Mode-name sticker toast (top center, ~1.5 s, erased from the retained JPEG).
+void drawModeToast() {
+  display.startWrite();
+  display.fillRoundRect(288, 12, 232, 48, 12, kShadow);
+  display.fillRoundRect(284, 8, 232, 48, 12, kLilac);
+  display.drawRoundRect(284, 8, 232, 48, 12, TFT_WHITE);
+  drawStarGlyph(310, 32, 9, kStarYellow);
+  display.setFont(&fonts::efontCN_16);
+  display.setTextSize(1);
+  display.setTextDatum(lgfx::textdatum_t::middle_center);
+  display.setTextColor(kInk, kLilac);
+  display.drawString(modeName(displayMode), 410, 32);
+  display.endWrite();
+  modeToastActive = true;
+  modeToastUntil = millis() + kModeToastMs;
+}
+
+// After the arrival ritual retires: Resident mode returns to its pinned photo,
+// Slideshow resumes its cadence from the newly shown card.
+void onArrivalRetired() {
+  if (displayMode == DisplayMode::Slideshow) {
+    nextSlideAt = millis() + kSlideshowIntervalMs;
+    return;
+  }
+  if (displayMode != DisplayMode::Resident || residentPhotoId.length() == 0) {
+    return;
+  }
+  for (size_t i = 0; i < feedCount; ++i) {
+    if (feedPhotos[i].photoId == residentPhotoId) {
+      if (i != currentPhotoIndex) carouselShow(i);
+      return;
+    }
+  }
+  // Pinned photo fell out of the feed window: stay on the newest card.
+}
+
+// ---- Carousel ---------------------------------------------------------------
+// Plain render for swipe navigation (no arrival ritual while browsing).
+bool renderFeedPhoto(size_t index) {
+  const FeedPhoto& photo = feedPhotos[index];
+  setStatus("DOWNLOADING", photo.photoId);
+  JpegDownload jpeg = downloadJpeg(imageUrl(photo.imageUrl));
+  if (jpeg.httpCode == 401) {
+    if (jpeg.data != nullptr) heap_caps_free(jpeg.data);
+    noteAuthFailure("image");
+    return false;
+  }
+  if (jpeg.data == nullptr) {
+    setStatus("IMAGE ERROR", "download rejected");
+    return false;
+  }
+  // Browsing away retires any in-flight arrival ritual and its sticker.
+  // Brightness is owned by carouselShow's page-turn dip, so don't restore here.
+  if (arrivalPhase != ArrivalPhase::Idle) repaintStickerRegion();
+  resetArrival(false);
+  const bool rendered = decodeAndDrawJpeg(jpeg.data, jpeg.size);
+  if (!rendered) {
+    heap_caps_free(jpeg.data);
+    setStatus("IMAGE ERROR", "JPEG rejected or decode failed");
+    return false;
+  }
+  retainShownJpeg(jpeg.data, jpeg.size);
+  hasRenderedPhoto = true;
+  drawInfoBar(photo.author, photo.caption,
+              String(index + 1) + "/" + String(feedCount));
+  setStatus("PHOTO READY", photo.author.length() ? photo.author : String("new photo"));
+  return true;
+}
+
+void carouselShow(size_t index) {
+  if (index >= feedCount) return;  // 到底不动: no wrap-around in the demo
+  currentPhotoIndex = index;
+  Serial.printf("CAROUSEL %u/%u %s\n", static_cast<unsigned>(index + 1),
+                static_cast<unsigned>(feedCount),
+                feedPhotos[index].photoId.c_str());
+  // Page-turn feel: dip the backlight while the next photo loads, then ease
+  // back up over the fresh frame. Cancels any ramp so nothing fights the dip.
+  blRampActive = false;
+  setBacklightNow(kBrightnessBrowseDim);
+  renderFeedPhoto(index);
+  startBacklightRamp(kBrightnessBoot, kBrowseRampMs, false);
+}
+
+// SWIPE_LEFT = next (newer, toward index 0); SWIPE_RIGHT = previous (older).
+void carouselNewer() {
+  if (currentPhotoIndex > 0) carouselShow(currentPhotoIndex - 1);
+}
+
+void carouselOlder() {
+  if (currentPhotoIndex + 1 < feedCount) carouselShow(currentPhotoIndex + 1);
+}
+
+// ---- Gesture consumption (carousel + sleep) ----------------------------------
+// Reads gestureQueue via a private cursor (multi-consumer safe: the TAP/like
+// consumer pops the same queue independently of this cursor).
+void handleCarouselAndSleepGestures() {
+  while (carouselGestureCursor != gestureQueueTail) {
+    const QueuedGesture gesture = gestureQueue[carouselGestureCursor];
+    carouselGestureCursor = (carouselGestureCursor + 1) % kGestureQueueSize;
+    if (gesture.event == GestureEvent::NONE) continue;
+    if (sleeping) {
+      wakeFromSleep();  // any touch event wakes the panel
+      continue;         // the waking touch is swallowed, not re-interpreted
+    }
+    switch (gesture.event) {
+      case GestureEvent::SWIPE_UP:
+        break;  // 最简手势集: 上滑不再息屏 (误触黑屏太像故障)
+      case GestureEvent::SWIPE_LEFT:
+        nextSlideAt = millis() + kSlideshowIntervalMs;  // manual nav delays slideshow
+        carouselNewer();
+        break;
+      case GestureEvent::SWIPE_RIGHT:
+        nextSlideAt = millis() + kSlideshowIntervalMs;
+        carouselOlder();
+        break;
+      case GestureEvent::SWIPE_DOWN:
+        Serial.println("REFRESH forced feed poll");
+        nextCloudPollAt = 0;
+        break;
+      default:
+        break;  // TAP / LONG_PRESS belong to like/selector
+    }
+  }
 }
 
 void showColorCheck() {
@@ -364,7 +1028,406 @@ void clearBinding() {
   preferences.remove("token");
   nextPairActionAt = 0;
   hasRenderedPhoto = false;
+  resetArrival(true);  // stop any fade and restore panel brightness
+  selectorOpen = false;
+  modeToastActive = false;
+  feedCount = 0;
+  currentPhotoIndex = 0;
+  clearStars();
+  freeShownJpeg();
   showPanelMessage("PAIRING REQUIRED", "requesting a new 6-digit code", kPink);
+}
+
+void noteRequestSuccess() { consecutiveAuthFailures = 0; }
+
+// Returns true when the failure budget is exhausted and the binding was
+// cleared. Callers treat that as "stop this poll cycle"; transient 401s just
+// keep the current photo on screen and retry next cycle.
+bool noteAuthFailure(const char* where) {
+  if (consecutiveAuthFailures < 255) ++consecutiveAuthFailures;
+  Serial.printf("AUTH 401 %s %u/%u\n", where,
+                static_cast<unsigned>(consecutiveAuthFailures),
+                static_cast<unsigned>(kAuthFailureLimit));
+  if (consecutiveAuthFailures < kAuthFailureLimit) {
+    setStatus("AUTH WARNING", "keeping binding, retrying");
+    return false;
+  }
+  Serial.println("AUTH 401 LIMIT reached, clearing binding");
+  consecutiveAuthFailures = 0;
+  clearBinding();
+  return true;
+}
+
+// ---- Gesture engine implementation ------------------------------------------
+
+const char* gestureName(GestureEvent event) {
+  switch (event) {
+    case GestureEvent::TAP: return "TAP";
+    case GestureEvent::SWIPE_LEFT: return "SWIPE_LEFT";
+    case GestureEvent::SWIPE_RIGHT: return "SWIPE_RIGHT";
+    case GestureEvent::SWIPE_UP: return "SWIPE_UP";
+    case GestureEvent::SWIPE_DOWN: return "SWIPE_DOWN";
+    case GestureEvent::LONG_PRESS: return "LONG_PRESS";
+    default: return "NONE";
+  }
+}
+
+void queueGesture(GestureEvent event, int16_t x, int16_t y) {
+  QueuedGesture& slot = gestureQueue[gestureQueueTail];
+  slot.event = event;
+  slot.x = x;
+  slot.y = y;
+  gestureQueueTail = (gestureQueueTail + 1) % kGestureQueueSize;
+  if (gestureQueueTail == gestureQueueHead) {
+    // Queue full: drop the oldest event so producers never block.
+    gestureQueueHead = (gestureQueueHead + 1) % kGestureQueueSize;
+  }
+}
+
+// Consumer API for other loop() features (carousel, screen-off, settings).
+// Returns false when no gesture is pending. TAPs are also consumed by the
+// like logic below, but remain in the queue for any other listener.
+bool nextGestureEvent(GestureEvent& event, int16_t& x, int16_t& y) {
+  if (gestureQueueHead == gestureQueueTail) return false;
+  const QueuedGesture& queued = gestureQueue[gestureQueueHead];
+  event = queued.event;
+  x = queued.x;
+  y = queued.y;
+  gestureQueueHead = (gestureQueueHead + 1) % kGestureQueueSize;
+  return true;
+}
+
+// Linear blend of two RGB888 colors; ratio 0 -> a, 1 -> b.
+uint32_t mixColors(uint32_t a, uint32_t b, float ratio) {
+  const uint8_t ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+  const uint8_t br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+  const uint8_t r = ar + static_cast<uint8_t>((br - ar) * ratio);
+  const uint8_t g = ag + static_cast<uint8_t>((bg - ag) * ratio);
+  const uint8_t bl = ab + static_cast<uint8_t>((bb - ab) * ratio);
+  return (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | bl;
+}
+
+void drawStarShape(int16_t cx, int16_t cy, float outerRadius, uint32_t color) {
+  const float innerRadius = outerRadius * 0.45f;
+  int32_t px[10];
+  int32_t py[10];
+  for (int i = 0; i < 10; ++i) {
+    const float angle = -PI / 2.0f + i * PI / 5.0f;
+    const float radius = (i % 2 == 0) ? outerRadius : innerRadius;
+    px[i] = cx + static_cast<int32_t>(cosf(angle) * radius);
+    py[i] = cy + static_cast<int32_t>(sinf(angle) * radius);
+  }
+  // Fan-fill the 10-vertex star outline from its center.
+  for (int i = 0; i < 10; ++i) {
+    display.fillTriangle(cx, cy, px[i], py[i], px[(i + 1) % 10],
+                         py[(i + 1) % 10], color);
+  }
+}
+
+void spawnStar(int16_t x, int16_t y) {
+  StarParticle& star = stars[starWriteIndex];
+  starWriteIndex = (starWriteIndex + 1) % kMaxStars;
+  star.active = true;
+  star.x = x;
+  star.y = y;
+  star.startedAt = millis();
+  star.lastStep = 255;
+  star.savedW = 0;  // recycled slot: any old save-under content is stale
+}
+
+void restoreStarBackground(StarParticle& star) {
+  if (star.savedW > 0 && star.saved != nullptr) {
+    display.pushImage(star.savedX, star.savedY, star.savedW, star.savedH,
+                      star.saved);
+  }
+  star.savedW = 0;
+}
+
+// Deactivate all particles and drop their save-under state. Called whenever
+// the pixels underneath are about to be replaced wholesale (new photo,
+// selector overlay), because restoring stale backups would paint ghosts.
+void clearStars() {
+  for (uint8_t i = 0; i < kMaxStars; ++i) {
+    stars[i].active = false;
+    stars[i].savedW = 0;
+  }
+}
+
+// Renders one animation step per active particle, 8 steps over the 1 s
+// lifetime (ease-out rise 0 -> -40 px, scale 0.8 -> 1.4, fading tint).
+// Every step first restores the pixels under the previous frame from a
+// per-star PSRAM save-under buffer, so expired stars leave no trace.
+void renderStars() {
+  const uint32_t now = millis();
+  for (uint8_t i = 0; i < kMaxStars; ++i) {
+    StarParticle& star = stars[i];
+    if (!star.active) continue;
+    const uint32_t elapsed = now - star.startedAt;
+    if (elapsed >= kStarLifetimeMs) {
+      restoreStarBackground(star);
+      star.active = false;
+      continue;
+    }
+    const uint8_t step = elapsed / (kStarLifetimeMs / 8);
+    if (step == star.lastStep) continue;  // already drew this frame
+    star.lastStep = step;
+
+    const float progress = static_cast<float>(elapsed) / kStarLifetimeMs;
+    const float easeOut = 1.0f - (1.0f - progress) * (1.0f - progress);
+    const float scale = 0.8f + 0.6f * easeOut;
+    const int16_t cy = star.y - static_cast<int16_t>(easeOut * 40.0f);
+    const float outerRadius = 7.0f * scale;
+
+    if (star.saved == nullptr) {
+      star.saved = static_cast<uint16_t*>(
+          heap_caps_malloc(kStarBufPx * kStarBufPx * sizeof(uint16_t),
+                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    }
+    display.startWrite();
+    restoreStarBackground(star);
+    if (star.saved != nullptr) {
+      int16_t x0 = star.x - kStarBufPx / 2;
+      int16_t y0 = cy - kStarBufPx / 2;
+      int16_t w = kStarBufPx;
+      int16_t h = kStarBufPx;
+      if (x0 < 0) { w += x0; x0 = 0; }
+      if (y0 < 0) { h += y0; y0 = 0; }
+      if (x0 + w > 800) w = 800 - x0;
+      if (y0 + h > 480) h = 480 - y0;
+      if (w > 0 && h > 0) {
+        display.readRect(x0, y0, w, h, star.saved);
+        star.savedX = x0;
+        star.savedY = y0;
+        star.savedW = w;
+        star.savedH = h;
+      }
+    }
+    // Fake the opacity fade by tinting toward a dim warm gray; true alpha is
+    // impossible without knowing the photo pixels underneath.
+    const uint32_t color = mixColors(kStarYellow, 0x9A927C, progress * 0.8f);
+    display.drawCircle(star.x, cy, static_cast<int32_t>(outerRadius + 4),
+                       mixColors(kStarYellow, 0x9A927C, 0.5f + progress * 0.4f));
+    drawStarShape(star.x, cy, outerRadius, color);
+    display.endWrite();
+  }
+}
+
+void onTap(int16_t x, int16_t y, uint32_t now) {
+  spawnStar(x, y);
+  if (now - lastLikeTapAt < kMultiTapGapMs && likeTapChain < 255) {
+    ++likeTapChain;
+  } else {
+    likeTapChain = 1;
+  }
+  if (pendingLikeTaps < 255) ++pendingLikeTaps;
+  lastLikeTapAt = now;
+  Serial.printf("TAP x=%d y=%d chain=%u pending=%u\n", x, y,
+                static_cast<unsigned>(likeTapChain),
+                static_cast<unsigned>(pendingLikeTaps));
+}
+
+// ---- Mode selector (long press) ----------------------------------------------
+// Three cards on a dark_night band (true alpha masking is not affordable on
+// this panel, so the band substitutes for the spec's 40% dimmed backdrop).
+void drawModeSelector() {
+  display.startWrite();
+  display.fillRect(0, 132, 800, 216, kNight);
+  display.setFont(&fonts::efontCN_16);
+  display.setTextSize(1);
+  display.setTextDatum(lgfx::textdatum_t::middle_center);
+  display.setTextColor(kBackground, kNight);
+  display.drawString("显示模式", 400, 150);
+  drawStarGlyph(340, 150, 6, kStarYellow);
+  drawStarGlyph(460, 150, 6, kStarYellow);
+
+  const char* labels[3] = {"最新", "常驻", "轮播"};
+  const char* subtitles[3] = {"新照片优先", "固定这一张", "自动翻页"};
+  for (int i = 0; i < 3; ++i) {
+    const int16_t x = 112 + i * 200;  // 176 px cards with 24 px gaps, centered
+    const int16_t cx = x + 88;
+    display.fillRoundRect(x + 4, 172, 176, 152, 20, kShadow);
+    display.fillRoundRect(x, 168, 176, 152, 20, kBackground);
+    if (static_cast<int>(displayMode) == i) {
+      for (int inset = 0; inset < 3; ++inset) {  // 3 px cream highlight border
+        display.drawRoundRect(x + inset, 168 + inset, 176 - 2 * inset,
+                              152 - 2 * inset, 20 - inset, kStarYellow);
+      }
+    }
+    // Icon glyphs, drawn from primitives (no icon font on board).
+    const int16_t cy = 212;
+    if (i == 0) {  // Latest: cream six-point star
+      drawStarGlyph(cx, cy, 18, kStarYellow);
+      display.fillCircle(cx, cy, 5, kBackground);
+    } else if (i == 1) {  // Resident: candy-pink pin
+      display.fillCircle(cx, cy - 4, 13, kPink);
+      display.fillTriangle(cx - 9, cy + 4, cx + 9, cy + 4, cx, cy + 22, kPink);
+      display.fillCircle(cx, cy - 4, 5, kBackground);
+    } else {  // Slideshow: two stacked photo cards
+      display.fillRoundRect(cx - 20, cy - 16, 28, 22, 4, kLilac);
+      display.fillRoundRect(cx - 8, cy - 4, 28, 22, 4, kBlue);
+    }
+    display.setTextSize(2);
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextColor(kInk, kBackground);
+    display.drawString(labels[i], cx, 262);
+    display.setTextSize(1);
+    display.setTextColor(kMuted, kBackground);
+    display.drawString(subtitles[i], cx, 300);
+  }
+  display.endWrite();
+}
+
+void openSelector() {
+  if (selectorOpen || shownJpeg == nullptr) return;  // need a repaint source
+  clearStars();
+  selectorOpen = true;
+  selectorOpenedAt = millis();
+  drawModeSelector();
+  Serial.println("SELECTOR OPEN");
+}
+
+void closeSelector(bool withToast) {
+  if (!selectorOpen) return;
+  selectorOpen = false;
+  repaintFullFromShown();
+  Serial.printf("SELECTOR CLOSE mode=%d\n", static_cast<int>(displayMode));
+  if (withToast) drawModeToast();
+}
+
+void selectorHandleTap(int16_t x, int16_t y) {
+  if (y >= 168 && y < 320) {
+    for (int i = 0; i < 3; ++i) {
+      const int16_t cardX = 112 + i * 200;
+      if (x >= cardX && x < cardX + 176) {
+        displayMode = static_cast<DisplayMode>(i);
+        if (displayMode == DisplayMode::Resident) {
+          residentPhotoId = feedCount > 0
+                                ? feedPhotos[currentPhotoIndex].photoId
+                                : latestPhotoId;
+        } else if (displayMode == DisplayMode::Slideshow) {
+          nextSlideAt = millis() + kSlideshowIntervalMs;
+        }
+        Serial.printf("MODE %s\n", modeName(displayMode));
+        closeSelector(true);
+        return;
+      }
+    }
+  }
+  closeSelector(false);  // tap outside the cards cancels
+}
+
+void pollTouchGestures() {
+  const uint32_t now = millis();
+  uint16_t rawX = 0, rawY = 0;
+  const bool touching = display.getTouch(&rawX, &rawY);
+
+  if (touching) {
+    const int16_t x = static_cast<int16_t>(rawX);
+    const int16_t y = static_cast<int16_t>(rawY);
+    if (!touchHeld) {
+      // IDLE -> TOUCH_DOWN: remember origin and timestamp.
+      touchHeld = true;
+      longPressFired = false;
+      touchDownX = touchLastX = x;
+      touchDownY = touchLastY = y;
+      touchDownAt = now;
+      return;
+    }
+    touchLastX = x;
+    touchLastY = y;
+    if (!longPressFired && now - touchDownAt >= kLongPressMs &&
+        abs(x - touchDownX) < kTapMaxMovePx &&
+        abs(y - touchDownY) < kTapMaxMovePx) {
+      longPressFired = true;
+      Serial.printf("GESTURE LONG_PRESS x=%d y=%d\n", touchDownX, touchDownY);
+      if (sleeping) {
+        queueGesture(GestureEvent::LONG_PRESS, touchDownX, touchDownY);
+      } else if (!selectorOpen) {
+        openSelector();
+      }
+    }
+    return;
+  }
+
+  if (!touchHeld) return;  // still IDLE
+  touchHeld = false;
+  if (longPressFired) return;  // release after long press: no tap/swipe
+
+  const uint32_t duration = now - touchDownAt;
+  const int dx = touchLastX - touchDownX;
+  const int dy = touchLastY - touchDownY;
+  const int adx = abs(dx);
+  const int ady = abs(dy);
+
+  if (adx < kTapMaxMovePx && ady < kTapMaxMovePx && duration < kTapMaxMs) {
+    if (sleeping) {
+      // A waking tap only wakes: no star, no like.
+      queueGesture(GestureEvent::TAP, touchLastX, touchLastY);
+    } else if (selectorOpen) {
+      selectorHandleTap(touchLastX, touchLastY);
+    } else {
+      queueGesture(GestureEvent::TAP, touchLastX, touchLastY);
+      onTap(touchLastX, touchLastY, now);
+    }
+  } else if ((adx > kSwipeMinMovePx || ady > kSwipeMinMovePx) &&
+             duration < kSwipeMaxMs) {
+    // GT911 on this panel reports X mirrored against the RGB framebuffer, so
+    // the horizontal direction is flipped to match what the user sees.
+    const GestureEvent event =
+        adx > ady ? (dx > 0 ? GestureEvent::SWIPE_LEFT : GestureEvent::SWIPE_RIGHT)
+                  : (dy > 0 ? GestureEvent::SWIPE_DOWN : GestureEvent::SWIPE_UP);
+    Serial.printf("GESTURE %s x=%d y=%d\n", gestureName(event), touchLastX,
+                  touchLastY);
+    if (selectorOpen && !sleeping) {
+      closeSelector(false);  // any swipe dismisses the selector
+    } else {
+      queueGesture(event, touchLastX, touchLastY);
+    }
+  }
+  // Slow drags outside both envelopes are deliberately ignored.
+}
+
+// Aggregated like reporting: taps accumulate, then 2 s of silence triggers one
+// POST /v1/reactions {"photo_id": ..., "tap_count": N}. 401 feeds the shared
+// auth-failure budget; a network error (-1) gets one silent retry, then the
+// batch is dropped (likes are best-effort).
+void reportPendingLikes() {
+  if (pendingLikeTaps == 0) return;
+  if (millis() - lastLikeTapAt < kLikeWindowMs) return;
+  // Like the photo the user is actually looking at, not the newest in feed.
+  const String& likedPhotoId =
+      (feedCount > 0) ? feedPhotos[currentPhotoIndex].photoId : latestPhotoId;
+  if (token.length() == 0 || likedPhotoId.length() == 0) {
+    pendingLikeTaps = 0;
+    return;
+  }
+
+  const uint8_t taps = pendingLikeTaps;
+  Serial.printf("LIKE %s x%u\n", likedPhotoId.c_str(),
+                static_cast<unsigned>(taps));
+  JsonDocument body;
+  body["photo_id"] = likedPhotoId;
+  body["tap_count"] = taps;
+  String payload;
+  serializeJson(body, payload);
+
+  HttpResponse response = requestJson("POST", "/v1/reactions", payload, true);
+  if (response.code == -1) {
+    response = requestJson("POST", "/v1/reactions", payload, true);
+  }
+  if (response.code == 401) {
+    noteAuthFailure("reactions");
+    Serial.printf("LIKE RESULT %s x%u 401\n", likedPhotoId.c_str(),
+                  static_cast<unsigned>(taps));
+  } else if (response.code >= 200 && response.code < 300) {
+    noteRequestSuccess();
+    Serial.printf("LIKE RESULT %s x%u OK %d\n", likedPhotoId.c_str(),
+                  static_cast<unsigned>(taps), response.code);
+  } else {
+    Serial.printf("LIKE RESULT %s x%u FAILED %d\n", likedPhotoId.c_str(),
+                  static_cast<unsigned>(taps), response.code);
+  }
+  pendingLikeTaps = 0;
 }
 
 bool ensureWifi() {
@@ -475,6 +1538,7 @@ void pollPairStatus() {
   token = newToken;
   preferences.putString("token", token);
   pairCode = String();
+  consecutiveAuthFailures = 0;
   setStatus("PAIRED", "token saved in NVS");
   nextCloudPollAt = 0;
 }
@@ -593,10 +1657,9 @@ bool decodeAndDrawJpeg(uint8_t* data, size_t size) {
     return false;
   }
 
-  // 320x240 -> 800x600, then crop 60 px from the scaled top and bottom. This
-  // fills the 800x480 panel without stretching the photo.
-  constexpr float kCoverScale = 2.5f;
-  constexpr int kScaledVerticalCrop = 60;
+  // Cover-fit constants (kCoverScale / kScaledVerticalCrop) live at namespace
+  // scope so the arrival ritual can repaint the sticker region identically.
+  clearStars();  // star save-under state is stale once the photo is replaced
   display.startWrite();
   display.fillScreen(TFT_BLACK);
   const bool decoded = display.drawJpg(data, size, 0, 0, 800, 480, 0,
@@ -608,9 +1671,10 @@ bool decodeAndDrawJpeg(uint8_t* data, size_t size) {
 
 void processFeed(const HttpResponse& response) {
   if (response.code == 401) {
-    clearBinding();
+    noteAuthFailure("feed");
     return;
   }
+  noteRequestSuccess();
   if (response.code != 200) {
     setStatus("FEED ERROR", String(response.code));
     return;
@@ -626,24 +1690,41 @@ void processFeed(const HttpResponse& response) {
     setStatus("ONLINE", "feed is empty");
     return;
   }
-  JsonObject item = items[0];
-  const char* id = item["photo_id"] | "";
-  const char* urlValue = item["image_url"] | "";
-  if (strlen(id) == 0 || strlen(urlValue) == 0) {
+
+  // Cache metadata for up to kFeedLimit newest photos. JPEG bytes are fetched
+  // on demand only for the card being displayed.
+  size_t count = 0;
+  for (JsonObject entry : items) {
+    if (count >= kFeedLimit) break;
+    const char* entryId = entry["photo_id"] | "";
+    const char* entryUrl = entry["image_url"] | "";
+    if (strlen(entryId) == 0 || strlen(entryUrl) == 0) continue;
+    FeedPhoto& slot = feedPhotos[count++];
+    slot.photoId = entryId;
+    slot.imageUrl = entryUrl;
+    slot.author = entry["author"]["display_name"] | "";
+    slot.caption = entry["caption"] | "";
+  }
+  if (count == 0) {
     setStatus("FEED INVALID", "missing photo_id/image_url");
     return;
   }
-  if (latestPhotoId == id && hasRenderedPhoto) {
+  feedCount = count;
+  if (currentPhotoIndex >= feedCount) currentPhotoIndex = feedCount - 1;
+
+  const FeedPhoto& newest = feedPhotos[0];
+  if (latestPhotoId == newest.photoId && hasRenderedPhoto) {
     setStatus("ONLINE", "latest photo is current");
     return;
   }
 
-  setStatus("DOWNLOADING", id);
-  const String url = imageUrl(urlValue);
-  JpegDownload jpeg = downloadJpeg(url);
+  // New arrival: the carousel jumps back to the newest card.
+  currentPhotoIndex = 0;
+  setStatus("DOWNLOADING", newest.photoId);
+  JpegDownload jpeg = downloadJpeg(imageUrl(newest.imageUrl));
   if (jpeg.httpCode == 401) {
     if (jpeg.data != nullptr) heap_caps_free(jpeg.data);
-    clearBinding();
+    noteAuthFailure("image");
     return;
   }
   if (jpeg.data == nullptr) {
@@ -651,25 +1732,69 @@ void processFeed(const HttpResponse& response) {
     return;
   }
 
+  if (sleeping) {
+    // Silent ingest while the panel is off: draw the pixels (backlight stays
+    // 0 so nothing is visible), skip the arrival ritual entirely, and count
+    // the photo as missed for the SLEEP WAKE log.
+    if (arrivalPhase != ArrivalPhase::Idle) repaintStickerRegion();
+    resetArrival(false);
+    const bool rendered = decodeAndDrawJpeg(jpeg.data, jpeg.size);
+    if (!rendered) {
+      heap_caps_free(jpeg.data);
+      setStatus("IMAGE ERROR", "JPEG rejected or decode failed");
+      return;
+    }
+    retainShownJpeg(jpeg.data, jpeg.size);
+    latestPhotoId = newest.photoId;
+    preferences.putString("latest_photo", latestPhotoId);
+    hasRenderedPhoto = true;
+    if (missedWhileSleeping < 255) ++missedWhileSleeping;
+    Serial.printf("CAROUSEL 1/%u %s\n", static_cast<unsigned>(feedCount),
+                  newest.photoId.c_str());
+    setStatus("PHOTO READY",
+              newest.author.length() ? newest.author : String("new photo"));
+    return;
+  }
+
+  // Arrival ritual: drop the backlight before the new pixels land, then the
+  // fade-in rides the PWM (an alpha blend would blow the PSRAM bandwidth).
+  selectorOpen = false;      // the arrival takes over the whole screen
+  modeToastActive = false;
+  resetArrival(false);  // retire any previous ritual
+  setBacklightNow(kBrightnessArrivalLow);
   const bool rendered = decodeAndDrawJpeg(jpeg.data, jpeg.size);
-  heap_caps_free(jpeg.data);
   if (!rendered) {
+    heap_caps_free(jpeg.data);
+    setBacklightNow(kBrightnessBoot);
     setStatus("IMAGE ERROR", "JPEG rejected or decode failed");
     return;
   }
 
-  latestPhotoId = id;
+  latestPhotoId = newest.photoId;
   preferences.putString("latest_photo", latestPhotoId);
   hasRenderedPhoto = true;
-  const char* author = item["author"]["display_name"] | "new photo";
+  const char* author =
+      newest.author.length() ? newest.author.c_str() : "new photo";
+  // Keep the JPEG in PSRAM so the sticker and caption bar can be painted
+  // back out of the photo when the ritual retires.
+  retainShownJpeg(jpeg.data, jpeg.size);
+  drawNameSticker(author);
+  if (newest.caption.length()) {
+    drawInfoBar(String(), newest.caption, String());
+    arrivalCaptionShown = true;
+  }
+  beginArrival(newest.photoId.c_str(), author);
+  Serial.printf("CAROUSEL 1/%u %s\n", static_cast<unsigned>(feedCount),
+                newest.photoId.c_str());
   setStatus("PHOTO READY", author);
 }
 
 void pollCloud() {
   const HttpResponse state = requestJson("GET", "/device/state");
   if (state.code == 401) {
-    clearBinding();
-    return;
+    if (noteAuthFailure("state")) return;  // budget exhausted, re-pairing
+  } else if (state.code > 0) {
+    noteRequestSuccess();
   }
   if (state.code == 200) {
     JsonDocument document;
@@ -685,7 +1810,7 @@ void pollCloud() {
 
   // Deliberately independent from unseen_count: current servers may not update
   // that field reliably, while /feed remains the source of truth for the photo.
-  processFeed(requestJson("GET", "/feed?limit=1"));
+  processFeed(requestJson("GET", "/feed?limit=" + String(kFeedLimit)));
 }
 
 bool validateConfiguration() {
@@ -705,7 +1830,7 @@ void setup() {
     Serial.println("DISPLAY INIT FAILED");
     return;
   }
-  display.setBrightness(180);
+  setBacklightNow(kBrightnessBoot);
   showColorCheck();
 
   deviceId = makeDeviceId();
@@ -757,6 +1882,27 @@ void loop() {
   }
 
   const uint32_t now = millis();
+  // Keep the arrival backlight animation running alongside network polling.
+  updateArrival(now);
+  // Sleep/wake backlight ramp (idle unless a transition is in flight).
+  updateBacklightRamp(now);
+  // Carousel paging + sleep/wake consume the gesture queue via a private
+  // cursor; TAP events remain available to the like consumer.
+  handleCarouselAndSleepGestures();
+  // Mode selector timeout, toast expiry, and slideshow auto-advance.
+  if (selectorOpen && timeReached(now, selectorOpenedAt + kSelectorTimeoutMs)) {
+    closeSelector(false);
+  }
+  if (modeToastActive && timeReached(now, modeToastUntil)) {
+    modeToastActive = false;
+    repaintRegionFromShown(280, 4, 244, 60);
+  }
+  if (displayMode == DisplayMode::Slideshow && !selectorOpen && !sleeping &&
+      arrivalPhase == ArrivalPhase::Idle && feedCount > 1 &&
+      timeReached(now, nextSlideAt)) {
+    nextSlideAt = now + kSlideshowIntervalMs;
+    carouselShow((currentPhotoIndex + 1) % feedCount);
+  }
   if (token.length() == 0) {
     if (!timeReached(now, nextPairActionAt)) {
       delay(25);
@@ -773,5 +1919,12 @@ void loop() {
     nextCloudPollAt = now + kCloudPollMs;
     pollCloud();
   }
+
+  // Touch gestures + like stars + aggregated like reporting. Non-blocking;
+  // the gesture engine lives in the anonymous namespace above.
+  pollTouchGestures();
+  if (!selectorOpen) renderStars();
+  reportPendingLikes();
+
   delay(25);
 }

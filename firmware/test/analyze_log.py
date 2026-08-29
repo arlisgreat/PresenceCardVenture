@@ -229,15 +229,26 @@ def run_checks(ev, http, sleeps, boots, panics):
             r.add("C11", "FAIL",
                   f"最低堆水位 {min_heap}B < 20KB (TLS 握手将失败)")
         elif drop > 20 * 1024:
-            r.add("C11", "WARN",
-                  f"堆前后半程均值下降 {int(drop)}B, 疑似泄漏 (min={min_heap}B)")
+            # 区分 "缓存台阶" (feed 拉新照片一次性入 PSRAM 后平稳) 与
+            # "持续下坡" (真泄漏): 末 1/3 段仍在下降才算疑似泄漏
+            tail = heaps[-max(3, len(heaps) // 3):]
+            tail_drop = tail[0] - tail[-1]
+            if tail_drop <= 2 * 1024:
+                r.add("C11", "INFO",
+                      f"堆一次性下降 {int(drop)}B 后平稳 (缓存增长, 如 feed "
+                      f"拉新图; 末段仅降 {tail_drop}B, min={min_heap}B)")
+            else:
+                r.add("C11", "WARN",
+                      f"堆持续下降 (总降 {int(drop)}B, 末段仍降 {tail_drop}B), "
+                      f"疑似泄漏 (min={min_heap}B)")
         else:
             r.add("C11", "PASS",
                   f"堆稳定: 均值 {int(statistics.mean(heaps))}B, 最低 {min_heap}B")
     else:
         r.add("C11", "SKIP", f"stat 心跳不足 ({len(heaps)} 条, 需≥4, 跑久一点)")
 
-    # C13 预览帧率 (目标 25fps, 定时器 40ms; 低于阈值说明渲染/总线过载)
+    # C13 预览帧率 (产品定标 10fps, 2026-08 决策: LVGL canvas+SPI 串行
+    # 架构天花板 ~12fps, 复古相机取景观感可接受; 25fps 需 esp_lcd 直推重构)
     pp = evs("perf_preview")
     fps = [int(d["fps"]) for d in pp if "fps" in d]
     # 拍照/翻相册的那一秒帧率会掉, 排除 0 帧样本后再统计, 但单独报告停顿
@@ -246,9 +257,9 @@ def run_checks(ev, http, sleeps, boots, panics):
         avg = statistics.mean(active)
         cpu = [int(d.get("cpu_pct", 0)) for d in pp]
         stalls = len(fps) - len(active)
-        if avg < 10:
+        if avg < 5:
             v = "FAIL"
-        elif avg < 20:
+        elif avg < 8:
             v = "WARN"
         else:
             v = "PASS"
@@ -361,6 +372,43 @@ def run_checks(ev, http, sleeps, boots, panics):
               f"人脸检测 {len(faces)} 次: avg={int(statistics.mean(ms))}ms "
               f"max={max(ms)}ms 有脸帧占比 {100*hit//len(faces)}%"
               + (" (avg>300ms, 跟随会迟滞)" if v == "WARN" else ""))
+
+    # C20 OTA: 下载闭环 / 校验失败拉黑 / 回滚
+    starts = evs("ota_start")
+    dones = evs("ota_done")
+    errs = evs("ota_err")
+    rollbacks = evs("ota_rollback")
+    valids = evs("ota_valid")
+    if starts or dones or errs or rollbacks:
+        fatal = [d for d in errs if d.get("fatal") == "1"]
+        if rollbacks:
+            r.add("C20", "WARN",
+                  f"发生 OTA 回滚 {len(rollbacks)} 次 (新固件自检未过, 已拉黑): "
+                  + ",".join(d.get("bad", "?") for d in rollbacks))
+        elif len(dones) < len(starts) and not errs:
+            r.add("C20", "FAIL",
+                  f"ota_start {len(starts)} 次但 done {len(dones)}/err 0 "
+                  "(下载中途断电/挂死?)")
+        elif fatal:
+            r.add("C20", "WARN",
+                  f"OTA 镜像级失败 {len(fatal)} 次 (md5/校验/超槽, 已拉黑该版本)",
+                  [f"stage={d.get('stage')} err={d.get('err')}" for d in fatal[:5]])
+        elif dones:
+            boots = [d for d in evs("ota_boot") if d.get("state") == "1"]
+            if boots and not valids:
+                r.add("C20", "WARN",
+                      "新固件以 PENDING_VERIFY 启动但未见 ota_valid "
+                      "(日志截断, 或自检未完成 -> 下次重启会回滚)")
+            else:
+                r.add("C20", "PASS",
+                      f"OTA 闭环 {len(dones)} 次"
+                      + (f", 新固件已落账 (ota_valid ×{len(valids)})" if valids else ""))
+        else:
+            r.add("C20", "WARN",
+                  f"OTA 尝试 {len(starts)} 次全部瞬时失败 (未拉黑, 会重试)",
+                  [f"stage={d.get('stage')} err={d.get('err')}" for d in errs[:5]])
+    else:
+        r.add("C20", "SKIP", "无 OTA 事件 (server 未下发 fw_latest, 正常)")
 
     # C12 延迟统计 (信息项)
     lat = {}

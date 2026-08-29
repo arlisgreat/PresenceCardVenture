@@ -17,6 +17,7 @@
 #include "pvc_clock.h"
 #include "pvc_trace.h"
 #include "net/pvc_net.h"
+#include "net/pvc_ota.h"
 #include "net/pvc_upload.h"
 
 static const char *TAG = "pvc_power";
@@ -36,6 +37,36 @@ static const char *TAG = "pvc_power";
 
 static bool s_quiet;
 
+/* ---------------- USB-C 供电检测 (AXP2101 PMIC) ----------------
+ * 充电/外供电时不省电: 常亮不入睡 (用户需求; 插电即"座充展示"模式)。
+ * AXP2101 @0x34, REG 0x00 PMU status1 bit5 = VBUS good。读失败按未充电
+ * (宁可照常省电, 不可插电误睡好过拔电常醒耗尽电池)。 */
+#include "driver/i2c_master.h"
+#define AXP2101_ADDR 0x34
+
+static i2c_master_dev_handle_t s_axp;
+
+static bool vbus_present(void)
+{
+    if (!s_axp) {
+        i2c_master_bus_handle_t bus = NULL;
+        if (i2c_master_get_bus_handle(BSP_I2C_NUM, &bus) != ESP_OK || !bus) {
+            return false;
+        }
+        i2c_device_config_t cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = AXP2101_ADDR,
+            .scl_speed_hz = 100000,
+        };
+        if (i2c_master_bus_add_device(bus, &cfg, &s_axp) != ESP_OK) return false;
+    }
+    uint8_t reg = 0x00, val = 0;
+    if (i2c_master_transmit_receive(s_axp, &reg, 1, &val, 1, 50) != ESP_OK) {
+        return false;
+    }
+    return (val & 0x20) != 0;
+}
+
 /* LVGL 距上次触摸/按键的毫秒数 (加锁读取, 任意任务安全)。
  * 返回 false = 没拿到显示锁, 本 tick 跳过判定 (宁可晚睡/晚醒也不误判)。 */
 static bool get_inactive(uint32_t *out)
@@ -48,6 +79,16 @@ static bool get_inactive(uint32_t *out)
 
 static void enter_sleep(const char *reason)
 {
+    /* 新固件已写好槽: 入睡时机 = 用户不在用, 重启生效代替睡眠
+     * (重启后按唤醒原因走正常开机, 用户可见新版本) */
+    if (pvc_ota_reboot_pending()) {
+        printf("[FW] OTA_REBOOT reason=%s uptime_ms=%lu\n", reason,
+               (unsigned long)(esp_timer_get_time() / 1000));
+        PVC_EV("ota_reboot reason=%s", reason);
+        app_camera_shutdown();
+        esp_restart();
+    }
+
     /* 联调日志: 全栈据此核对 "单次唤醒 <20s 在线" (§6) */
     printf("[FW] SLEEP reason=%s uptime_ms=%lu queue=%d synced=%d\n",
            reason, (unsigned long)(esp_timer_get_time() / 1000),
@@ -109,6 +150,20 @@ static void power_task(void *arg)
         pvc_net_state_t st = pvc_net_state();
         /* 配网 / 配对中用户正在跟屏幕交互, 不休眠 */
         bool interactive = (st == PVC_NET_PROVISIONING || st == PVC_NET_PAIRING);
+
+        /* OTA 下载中不得断电 (静默唤醒 45s 硬限也让位, 下载自带 30s 超时兜底) */
+        if (pvc_ota_busy()) continue;
+
+        /* USB-C 供电中: 不省电不入睡; 静默唤醒时插着电则转正常亮屏 */
+        if (vbus_present()) {
+            static bool s_vbus_logged;
+            if (!s_vbus_logged) {
+                s_vbus_logged = true;
+                PVC_EV("power vbus=1 sleep_inhibit=1");
+            }
+            if (s_quiet) exit_quiet();
+            continue;
+        }
 
         uint32_t idle = 0;
         if (!get_inactive(&idle)) continue;

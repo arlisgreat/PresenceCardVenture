@@ -149,7 +149,17 @@ void hw2d_apply_filter_lut(uint16_t *dst, const uint16_t *src, uint32_t npix,
         return;
     }
 
-    /* 逐 4 像素批次 (uint64 读取, 缓存友好) */
+    /* 逐 4 像素批次 (uint64 读取, 缓存友好)。
+     * src/dst 须 8 字节对齐才走批处理: 相机 DMA 缓冲对齐无保证,
+     * Xtensa 非对齐 64bit 访存会触发 LoadStoreAlignment 异常 (UBSAN 实证) */
+    if ((((uintptr_t)src | (uintptr_t)dst) & 7u) != 0) {
+        for (i = 0; i < npix; i++) {
+            uint16_t p = src[i];
+            dst[i] = PACK_RGB565(s_lut_r[UNPACK_R(p)], s_lut_g[UNPACK_G(p)],
+                                 s_lut_b[UNPACK_B(p)]);
+        }
+        return;
+    }
     uint32_t nq = npix / 4;
     const uint64_t *sq = (const uint64_t *)src;
     uint64_t *dq = (uint64_t *)dst;
@@ -389,9 +399,414 @@ void hw2d_alpha_blend(uint16_t *dst, const uint16_t *src, uint32_t npix,
 }
 
 /* ================================================================== */
+/* YUV422 (YCbYCr packed) 算子                                         */
+/* ================================================================== */
+
+void hw2d_yuv_build_luts(const hw2d_filter_t *f, hw2d_yuv_luts_t *luts)
+{
+    if (luts->valid && memcmp(&luts->cached, f, sizeof(*f)) == 0) return;
+
+    /* Y: 对比度 + 亮度偏置 + 加权综合增益 (BT.601 亮度权重折算) */
+    int kc = (f->contrast * 128) / 100;
+    int kg = (f->gain_r * 77 + f->gain_g * 150 + f->gain_b * 29) * 256 / 25600;
+    for (int i = 0; i < 256; i++) {
+        int v = ((i - 128) * kc) / 128 + 128;
+        v = clamp_u8(v + f->bias);
+        luts->y[i] = clamp_u8((v * kg) / 256);
+    }
+    /* Cb/Cr: 饱和度缩放 + 色调偏移 (暖调 gain_r>gain_b -> Cr+, Cb-) */
+    int ks = (f->sat * 128) / 100;
+    /* 色调偏移 1:1 传递 gain 差 (CCD/胶片类滤镜的色偏主要落在色度分量;
+     * cb/cr 为完整 256 项查表, 后续可直接注入任意色度曲线) */
+    int tint_cr = (int)f->gain_r - (int)f->gain_g;
+    int tint_cb = (int)f->gain_b - (int)f->gain_g;
+    for (int i = 0; i < 256; i++) {
+        luts->cb[i] = clamp_u8(128 + (((i - 128) * ks) >> 7) + tint_cb);
+        luts->cr[i] = clamp_u8(128 + (((i - 128) * ks) >> 7) + tint_cr);
+    }
+    luts->cached = *f;
+    luts->valid = true;
+}
+
+void hw2d_yuv_filter(uint8_t *dst, const uint8_t *src, uint32_t npix,
+                     const hw2d_yuv_luts_t *luts)
+{
+    uint32_t nbytes = npix * 2;
+    for (uint32_t i = 0; i + 3 < nbytes; i += 4) {
+        dst[i]     = luts->y[src[i]];
+        dst[i + 1] = luts->cb[src[i + 1]];
+        dst[i + 2] = luts->y[src[i + 2]];
+        dst[i + 3] = luts->cr[src[i + 3]];
+    }
+}
+
+/* BT.601 全范围 YCbCr -> RGB (Q8 定点): R=Y+1.402Cr' G=Y-0.344Cb'-0.714Cr'
+ * B=Y+1.772Cb' (Cb'=Cb-128) */
+static inline uint16_t yuv2rgb565(int y, int cb, int cr)
+{
+    int c = cb - 128, d = cr - 128;
+    int r = y + ((359 * d) >> 8);
+    int g = y - ((88 * c + 183 * d) >> 8);
+    int b = y + ((454 * c) >> 8);
+    return PACK_RGB565(clamp_u8(r), clamp_u8(g), clamp_u8(b));
+}
+
+/* 转换加数查表 (与滤镜无关的固定系数, hw2d_init 一次生成, 全局共享):
+ * 预览热路径用查表加法替代逐像素 3 次乘法 (与 yuv2rgb565 逐位一致) */
+static int16_t s_radd[256], s_gcb[256], s_gcr[256], s_badd[256];
+
+static void conv_luts_init(void)
+{
+    for (int i = 0; i < 256; i++) {
+        int c = i - 128;
+        s_radd[i] = (int16_t)((359 * c) >> 8);
+        s_gcb[i]  = (int16_t)(88 * c);       /* 未移位: 相加后统一 >>8, */
+        s_gcr[i]  = (int16_t)(183 * c);      /* 与 yuv2rgb565 逐位一致  */
+        s_badd[i] = (int16_t)((454 * c) >> 8);
+    }
+}
+
+static inline uint16_t yuv2rgb565_fast(int y, int cb, int cr)
+{
+    int r = y + s_radd[cr];
+    int g = y - ((s_gcb[cb] + s_gcr[cr]) >> 8);
+    int b = y + s_badd[cb];
+    return PACK_RGB565(clamp_u8(r), clamp_u8(g), clamp_u8(b));
+}
+
+void hw2d_yuv_filter_rgb565(uint16_t *dst, const uint8_t *src, uint32_t npix,
+                            const hw2d_yuv_luts_t *luts)
+{
+    uint32_t np = npix & ~1u;
+    for (uint32_t i = 0; i < np; i += 2) {
+        const uint8_t *p = src + i * 2;
+        int y0 = luts->y[p[0]];
+        int cb = luts->cb[p[1]];
+        int y1 = luts->y[p[2]];
+        int cr = luts->cr[p[3]];
+        dst[i]     = yuv2rgb565(y0, cb, cr);
+        dst[i + 1] = yuv2rgb565(y1, cb, cr);
+    }
+}
+
+/*
+ * 反向写出变体: 输出即 180 度旋转 (装配方向补偿)。
+ * GC0308 真机 CISCTL 翻转位写不进 (ACK 但读回不变), 软件补偿:
+ * 预览用本算子零额外遍历; 拍照用 hw2d_yuv_rot180 原地反转。
+ */
+void hw2d_yuv_filter_rgb565_rot180(uint16_t *dst, const uint8_t *src,
+                                   uint32_t npix, const hw2d_yuv_luts_t *luts)
+{
+    uint32_t np = npix & ~1u;
+    uint16_t *d = dst + np;
+    for (uint32_t i = 0; i < np; i += 2) {
+        const uint8_t *p = src + i * 2;
+        int y0 = luts->y[p[0]];
+        int cb = luts->cb[p[1]];
+        int y1 = luts->y[p[2]];
+        int cr = luts->cr[p[3]];
+        d -= 2;                              /* (x,y)->(W-1-x,H-1-y): 像素序整体倒置 */
+        d[1] = yuv2rgb565(y0, cb, cr);
+        d[0] = yuv2rgb565(y1, cb, cr);
+    }
+}
+
+/*
+ * 预览终极融合算子: 装配 180 度补偿 + 自拍镜像 + 色度降噪 + 滤镜 +
+ * RGB565 转换, 单遍完成 (真机实测三遍叠加 60ms/帧 -> 单遍)。
+ *   mirror=1: rot180 与水平镜像合成 = 纯垂直翻转 (行倒序, 行内正序),
+ *             读写都是顺序访问, PSRAM 最友好;
+ *   mirror=0: 纯 rot180 (行倒序 + 行内倒置 + 对内 Y 互换)。
+ * 色度 1-2-1 平滑在扫描中就地完成 (左邻取原值), 不再改写相机帧。
+ */
+void hw2d_yuv_render_rgb565(uint16_t *dst, const uint8_t *src,
+                            uint32_t w, uint32_t h,
+                            const hw2d_yuv_luts_t *luts, bool mirror)
+{
+    /* 注: 曾试行缓冲 (整行 memcpy 进出内部) 反而 40->55ms —— dcache 对
+     * 顺序流已足够好, 多余搬运净亏。慢的真因是相机任务同核抢占 (见
+     * sdkconfig CAMERA_CORE1 注释), 算子本体直读直写即可 */
+    uint32_t nmp = w / 2, last = nmp - 1;
+    for (uint32_t y = 0; y < h; y++) {
+        const uint8_t *srow = src + (size_t)y * w * 2;
+        uint16_t *drow = dst + (size_t)(h - 1 - y) * w;
+        uint8_t pcb = srow[1], pcr = srow[3];
+        if (mirror) {
+            for (uint32_t i = 0; i < last; i++) {     /* 尾宏像素拆出, 免逐次分支 */
+                const uint8_t *m = srow + (size_t)i * 4;
+                uint8_t cb0 = m[1], cr0 = m[3];
+                int cb = luts->cb[(uint8_t)((pcb + 2 * cb0 + m[5]) >> 2)];
+                int cr = luts->cr[(uint8_t)((pcr + 2 * cr0 + m[7]) >> 2)];
+                pcb = cb0; pcr = cr0;
+                drow[i * 2]     = yuv2rgb565_fast(luts->y[m[0]], cb, cr);
+                drow[i * 2 + 1] = yuv2rgb565_fast(luts->y[m[2]], cb, cr);
+            }
+            const uint8_t *m = srow + (size_t)last * 4;
+            int cb = luts->cb[(uint8_t)((pcb + 3 * m[1]) >> 2)];
+            int cr = luts->cr[(uint8_t)((pcr + 3 * m[3]) >> 2)];
+            drow[last * 2]     = yuv2rgb565_fast(luts->y[m[0]], cb, cr);
+            drow[last * 2 + 1] = yuv2rgb565_fast(luts->y[m[2]], cb, cr);
+        } else {
+            uint16_t *d = drow + w;
+            for (uint32_t i = 0; i < last; i++) {
+                const uint8_t *m = srow + (size_t)i * 4;
+                uint8_t cb0 = m[1], cr0 = m[3];
+                int cb = luts->cb[(uint8_t)((pcb + 2 * cb0 + m[5]) >> 2)];
+                int cr = luts->cr[(uint8_t)((pcr + 2 * cr0 + m[7]) >> 2)];
+                pcb = cb0; pcr = cr0;
+                d -= 2;                      /* 行内倒置 + 对内 Y 互换 */
+                d[1] = yuv2rgb565_fast(luts->y[m[0]], cb, cr);
+                d[0] = yuv2rgb565_fast(luts->y[m[2]], cb, cr);
+            }
+            const uint8_t *m = srow + (size_t)last * 4;
+            int cb = luts->cb[(uint8_t)((pcb + 3 * m[1]) >> 2)];
+            int cr = luts->cr[(uint8_t)((pcr + 3 * m[3]) >> 2)];
+            d -= 2;
+            d[1] = yuv2rgb565_fast(luts->y[m[0]], cb, cr);
+            d[0] = yuv2rgb565_fast(luts->y[m[2]], cb, cr);
+        }
+    }
+}
+
+/*
+ * 色度降噪: 每行对 Cb/Cr 各做 1-2-1 水平平滑 (宏像素粒度, 原地)。
+ * 传感器色度噪声在低光下呈单像素彩点 (常偏绿: YUV 数据受扰后
+ * 转 RGB 的钳位方向所致); Y 磨皮不动色度, 这里补上。~2ms @QVGA。
+ */
+void hw2d_yuv_chroma_smooth(uint8_t *yuyv, uint32_t w, uint32_t h)
+{
+    if (!yuyv || w < 4 || (w & 1u)) return;
+    uint32_t nmp = w / 2;
+    for (uint32_t y = 0; y < h; y++) {
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        uint8_t pcb = row[1], pcr = row[3];      /* 左邻原值 (首像素用自身) */
+        for (uint32_t i = 0; i < nmp; i++) {
+            uint8_t *m = row + (size_t)i * 4;
+            uint8_t cb = m[1], cr = m[3];
+            uint8_t ncb = (i + 1 < nmp) ? m[5] : cb;
+            uint8_t ncr = (i + 1 < nmp) ? m[7] : cr;
+            m[1] = (uint8_t)((pcb + 2 * cb + ncb) >> 2);
+            m[3] = (uint8_t)((pcr + 2 * cr + ncr) >> 2);
+            pcb = cb; pcr = cr;                  /* 左邻用原值, 防级联扩散 */
+        }
+    }
+}
+
+/* YUYV422 原地 180 度旋转: 宏像素序倒置 + 对内 Y0/Y1 互换 (色度随对) */
+void hw2d_yuv_rot180(uint8_t *yuyv, uint32_t npix)
+{
+    uint32_t nmp = npix / 2;
+    uint8_t *a = yuyv, *b = yuyv + (size_t)(nmp - 1) * 4;
+    for (uint32_t i = 0; i < nmp / 2; i++, a += 4, b -= 4) {
+        uint8_t t0 = a[0], t1 = a[1], t2 = a[2], t3 = a[3];
+        a[0] = b[2]; a[1] = b[1]; a[2] = b[0]; a[3] = b[3];
+        b[0] = t2; b[1] = t1; b[2] = t0; b[3] = t3;
+    }
+    if (nmp & 1) {                           /* 中心宏像素: 只换 Y */
+        uint8_t *m = yuyv + (size_t)(nmp / 2) * 4;
+        uint8_t t = m[0]; m[0] = m[2]; m[2] = t;
+    }
+}
+
+void hw2d_rgb565_hmirror(uint16_t *rgb, uint32_t w, uint32_t h)
+{
+    if (!rgb || w < 2 || h == 0) return;
+    for (uint32_t y = 0; y < h; y++) {
+        uint16_t *row = rgb + (size_t)y * w;
+        for (uint32_t x = 0; x < w / 2; x++) {
+            uint16_t t = row[x];
+            row[x] = row[w - 1 - x];
+            row[w - 1 - x] = t;
+        }
+    }
+}
+
+void hw2d_yuv_hmirror(uint8_t *yuyv, uint32_t w, uint32_t h)
+{
+    if (!yuyv || w < 2 || (w & 1u) || h == 0) return;
+    uint32_t nmp = w / 2;                 /* 每宏像素 = Y0 Cb Y1 Cr */
+    for (uint32_t y = 0; y < h; y++) {
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        for (uint32_t i = 0; i < nmp / 2; i++) {
+            uint8_t *a = row + (size_t)i * 4;
+            uint8_t *b = row + (size_t)(nmp - 1 - i) * 4;
+            uint8_t a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+            a[0] = b[2]; a[1] = b[1]; a[2] = b[0]; a[3] = b[3];
+            b[0] = a2;   b[1] = a1;   b[2] = a0;   b[3] = a3;
+        }
+        if (nmp & 1u) {
+            uint8_t *m = row + (size_t)(nmp / 2) * 4;
+            uint8_t t = m[0]; m[0] = m[2]; m[2] = t;
+        }
+    }
+}
+
+void hw2d_yuv_blur_y(uint8_t *dst, const uint8_t *src, uint32_t w, uint32_t h,
+                     uint8_t strength)
+{
+    uint32_t nbytes = w * h * 2;
+    if (strength == 0) {
+        if (dst != src) memcpy(dst, src, nbytes);
+        return;
+    }
+    if (hw2d_blur_prepare(w, h) != ESP_OK) {
+        if (dst != src) memcpy(dst, src, nbytes);
+        return;
+    }
+    /* 提取 Y 平面到 s_plane_r (借用 blur 平面; 单任务约定) */
+    for (uint32_t i = 0; i < w * h; i++) s_plane_r[i] = src[i * 2];
+
+    for (uint32_t y = 0; y < h; y++) {
+        uint32_t yt = (y == 0) ? 0 : y - 1;
+        uint32_t yb = (y == h - 1) ? y : y + 1;
+        const uint8_t *rt = s_plane_r + (size_t)yt * w;
+        const uint8_t *rm = s_plane_r + (size_t)y * w;
+        const uint8_t *rb = s_plane_r + (size_t)yb * w;
+        uint8_t *orow = dst + (size_t)y * w * 2;
+        const uint8_t *irow = src + (size_t)y * w * 2;
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t xl = (x == 0) ? 0 : x - 1;
+            uint32_t xr = (x == w - 1) ? x : x + 1;
+            int sum = rt[xl] + rt[x] + rt[xr] + rm[xl] + rm[x] + rm[xr] +
+                      rb[xl] + rb[x] + rb[xr];
+            uint8_t avg = s_avg_lut[sum];
+            int yv = avg + ((rm[x] - avg) * strength) / 100;
+            orow[x * 2] = clamp_u8(yv);
+            orow[x * 2 + 1] = irow[x * 2 + 1];    /* 色度原样保留 */
+        }
+    }
+}
+
+void hw2d_yuv_blend_circle(uint8_t *yuyv, uint32_t w, uint32_t h,
+                           int cx, int cy, int r, uint8_t alpha)
+{
+    if (cx - r < 0 || cx + r >= (int)w || cy - r < 0 || cy + r >= (int)h) {
+        return;                       /* 越界整圆裁剪 (与预览 blend 同策略) */
+    }
+    for (int y = cy - r; y <= cy + r; y++) {
+        int half = 0;
+        while ((half + 1) * (half + 1) + (y - cy) * (y - cy) <= r * r) half++;
+        int x0 = cx - half, x1 = cx + half;
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        for (int x = x0; x <= x1; x++) {
+            uint8_t *py = row + x * 2;
+            py[0] = (uint8_t)(py[0] + (((255 - py[0]) * alpha) >> 8));
+            uint8_t *pc = row + (x & ~1) * 2 + 1;      /* 本对 Cb */
+            pc[0] = (uint8_t)(pc[0] + (((128 - pc[0]) * alpha) >> 8));
+            pc[2] = (uint8_t)(pc[2] + (((128 - pc[2]) * alpha) >> 8));
+        }
+    }
+}
+
+void hw2d_yuv_extract_y(uint8_t *dst_gray, const uint8_t *src, uint32_t npix)
+{
+    for (uint32_t i = 0; i < npix; i++) dst_gray[i] = src[i * 2];
+}
+
+/* ------------------------------------------------------------------ */
+/* CCD 机型滤镜算子                                                     */
+/* ------------------------------------------------------------------ */
+
+/* RGB888 -> YCbCr (BT.601 全范围, Q8 定点) */
+static inline void rgb2yuv(int r, int g, int b, uint8_t *y, uint8_t *cb, uint8_t *cr)
+{
+    *y  = clamp_u8((77 * r + 150 * g + 29 * b) >> 8);
+    *cb = clamp_u8(128 + (((b - (int)*y) * 144) >> 8));
+    *cr = clamp_u8(128 + (((r - (int)*y) * 183) >> 8));
+}
+
+/* 单像素 N^3 三线性查表: rgb 入, rgb 出 (Q16 定点权重) */
+static inline void lut3d_sample(const uint8_t *lut, int n, int r, int g, int b,
+                                int *ro, int *go, int *bo)
+{
+    int m = n - 1;
+    int rp = r * m, gp = g * m, bp = b * m;      /* 0..255*m */
+    int r0 = rp >> 8, g0 = gp >> 8, b0 = bp >> 8;
+    int fr = rp & 255, fg = gp & 255, fb = bp & 255;
+    int r1 = r0 < m ? r0 + 1 : m;
+    int g1 = g0 < m ? g0 + 1 : m;
+    int b1 = b0 < m ? b0 + 1 : m;
+    long acc[3] = { 0, 0, 0 };
+    for (int bi = 0; bi < 2; bi++) {
+        int bb = bi ? b1 : b0, wb = bi ? fb : 256 - fb;
+        for (int gi = 0; gi < 2; gi++) {
+            int gg = gi ? g1 : g0, wg = gi ? fg : 256 - fg;
+            for (int ri = 0; ri < 2; ri++) {
+                int rr = ri ? r1 : r0, wr = ri ? fr : 256 - fr;
+                const uint8_t *p = lut + (((size_t)bb * n + gg) * n + rr) * 3;
+                long w = (long)wb * wg * wr;      /* <= 2^24 */
+                acc[0] += p[0] * w;
+                acc[1] += p[1] * w;
+                acc[2] += p[2] * w;
+            }
+        }
+    }
+    *ro = (int)(acc[0] >> 24);
+    *go = (int)(acc[1] >> 24);
+    *bo = (int)(acc[2] >> 24);
+}
+
+void hw2d_yuv_3dlut(uint8_t *yuyv, uint32_t npix, const uint8_t *lut, int n)
+{
+    uint32_t np = npix & ~1u;
+    for (uint32_t i = 0; i < np; i += 2) {
+        uint8_t *p = yuyv + i * 2;
+        int cb = p[1], cr = p[3];
+        for (int k = 0; k < 2; k++) {
+            int y = p[k * 2];
+            int c = cb - 128, d = cr - 128;
+            int r = clamp_u8(y + ((359 * d) >> 8));
+            int g = clamp_u8(y - ((88 * c + 183 * d) >> 8));
+            int b = clamp_u8(y + ((454 * c) >> 8));
+            int ro, go, bo;
+            lut3d_sample(lut, n, r, g, b, &ro, &go, &bo);
+            uint8_t ny, ncb, ncr;
+            rgb2yuv(ro, go, bo, &ny, &ncb, &ncr);
+            p[k * 2] = ny;
+            if (k == 0) { p[1] = ncb; p[3] = ncr; }   /* 色度取首像素结果 */
+        }
+    }
+}
+
+void hw2d_yuv_grain(uint8_t *yuyv, uint32_t w, uint32_t h,
+                    uint8_t amount, uint8_t highlights, uint32_t seed)
+{
+    if (!amount) return;
+    uint32_t rnd = seed * 2654435761u + 12345u;
+    uint32_t npix = w * h;
+    for (uint32_t i = 0; i < npix; i++) {
+        rnd = rnd * 1664525u + 1013904223u;
+        int y = yuyv[i * 2];
+        /* 亮部权重: w = 1 + hl% * (Y/255 - 0.5), Q8 */
+        int wq = 256 + ((int)highlights * ((y << 8) / 255 - 128)) / 100 / 1;
+        int noise = ((int)((rnd >> 16) & 0xFF) - 128) * amount / 128;
+        yuyv[i * 2] = clamp_u8(y + ((noise * wq) >> 8));
+    }
+}
+
+void hw2d_yuv_vignette(uint8_t *yuyv, uint32_t w, uint32_t h, uint8_t strength)
+{
+    if (!strength) return;
+    int cx = (int)w / 2, cy = (int)h / 2;
+    long rmax2 = (long)cx * cx + (long)cy * cy;
+    for (uint32_t y = 0; y < h; y++) {
+        long dy2 = (long)((int)y - cy) * ((int)y - cy);
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        for (uint32_t x = 0; x < w; x++) {
+            long d2 = (long)((int)x - cx) * ((int)x - cx) + dy2;
+            /* 衰减 = 1 - strength% * (d2/rmax2)^1 (平方场近似) */
+            int att = 256 - (int)((long)strength * 256 * d2 / rmax2 / 100);
+            row[x * 2] = (uint8_t)((row[x * 2] * att) >> 8);
+        }
+    }
+}
+
+/* ================================================================== */
 /* 16bit 车道字节交换 (LE<->BE)                                        */
 /* ================================================================== */
-#if defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
+/* PVC_NO_PIE: QEMU 仿真等场景禁用 PIE 汇编 (指令仿真支持不确定), 走 C 路径 */
+#if defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3) && \
+    !defined(PVC_NO_PIE)
 #define HW2D_HAVE_PIE 1
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -564,6 +979,8 @@ static struct {
     uint64_t us_copy;
     uint32_t n_fused;
     uint64_t us_fused;
+    uint32_t n_yuv;
+    uint64_t us_yuv;
 } s_stats;
 
 void hw2d_stats_reset(void)
@@ -601,6 +1018,10 @@ void hw2d_stats_dump(void)
     if (s_stats.n_fused) {
         printf("[hw2d] scale2x_lut: %lu calls, avg %llu us\n",
                (unsigned long)s_stats.n_fused, s_stats.us_fused / s_stats.n_fused);
+    }
+    if (s_stats.n_yuv) {
+        printf("[hw2d] yuv2rgb_lut : %lu calls, avg %llu us\n",
+               (unsigned long)s_stats.n_yuv, s_stats.us_yuv / s_stats.n_yuv);
     }
 }
 
@@ -652,6 +1073,34 @@ void hw2d_scale_stat(const uint16_t *src, uint32_t w_src, uint32_t h_src,
     s_stats.us_scale += HW2D_TIME_US() - t0;
 }
 
+void hw2d_yuv_filter_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t npix, const hw2d_yuv_luts_t *luts)
+{
+    uint32_t t0 = HW2D_TIME_US();
+    hw2d_yuv_filter_rgb565(dst, src, npix, luts);
+    s_stats.n_yuv++;
+    s_stats.us_yuv += HW2D_TIME_US() - t0;
+}
+
+void hw2d_yuv_filter_rgb565_rot180_stat(uint16_t *dst, const uint8_t *src,
+                                        uint32_t npix, const hw2d_yuv_luts_t *luts)
+{
+    uint32_t t0 = HW2D_TIME_US();
+    hw2d_yuv_filter_rgb565_rot180(dst, src, npix, luts);
+    s_stats.n_yuv++;
+    s_stats.us_yuv += HW2D_TIME_US() - t0;
+}
+
+void hw2d_yuv_render_rgb565_stat(uint16_t *dst, const uint8_t *src,
+                                 uint32_t w, uint32_t h,
+                                 const hw2d_yuv_luts_t *luts, bool mirror)
+{
+    uint32_t t0 = HW2D_TIME_US();
+    hw2d_yuv_render_rgb565(dst, src, w, h, luts, mirror);
+    s_stats.n_yuv++;
+    s_stats.us_yuv += HW2D_TIME_US() - t0;
+}
+
 void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
                            uint32_t dw, uint32_t dh, const hw2d_filter_t *f)
 {
@@ -664,6 +1113,7 @@ void hw2d_scale2x_lut_stat(uint16_t *dst, const uint16_t *src,
 esp_err_t hw2d_init(void)
 {
     hw2d_stats_reset();
+    conv_luts_init();       /* YUV->RGB 转换加数表 (预览热路径去乘法) */
 
 #if HW2D_HAVE_PIE
     if (!s_pie_mtx) s_pie_mtx = xSemaphoreCreateMutex();

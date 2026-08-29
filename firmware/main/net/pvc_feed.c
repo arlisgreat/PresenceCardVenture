@@ -1,5 +1,8 @@
 #include "pvc_feed.h"
 #include "pvc_config.h"
+#include "pvc_ota.h"
+#include "pvc_sdio.h"
+#include "pvc_jpeg.h"      /* pvc_jpeg_intact: 拒绝写了一半的缓存 */    /* SD 与 LCD 共享 SPI2: 一切 SD I/O 须持锁 */
 #include "pvc_http.h"
 #include "pvc_store.h"
 #include "pvc_trace.h"
@@ -50,14 +53,18 @@ static void lock_init(void)
 }
 
 /* ---------------- SD 镜像 ---------------- */
-static void sd_save_slot(const slot_t *s)
+static void sd_save_slot_impl(const slot_t *s)
 {
-    char path[96];
+    char path[96], tmp[96];
     snprintf(path, sizeof(path), FEED_DIR "/%s.jpg", s->meta.photo_id);
-    FILE *f = fopen(path, "wb");
+    snprintf(tmp, sizeof(tmp), FEED_DIR "/wr.tmp");
+    FILE *f = fopen(tmp, "wb");
     if (!f) return;                       /* 无 SD: 静默跳过 (纯 PSRAM 模式) */
-    fwrite(s->jpg, 1, s->len, f);
+    size_t wr = fwrite(s->jpg, 1, s->len, f);
     fclose(f);
+    if (wr != s->len) { remove(tmp); return; }   /* 卡满/IO 错: 不留残缺 */
+    remove(path);
+    rename(tmp, path);                    /* 原子顶替: 崩溃只损失 tmp */
 
     snprintf(path, sizeof(path), FEED_DIR "/%s.txt", s->meta.photo_id);
     f = fopen(path, "w");
@@ -66,7 +73,14 @@ static void sd_save_slot(const slot_t *s)
     fclose(f);
 }
 
-static void sd_sync_index(void)
+static void sd_save_slot(const slot_t *s)
+{
+    pvc_sd_lock();
+    sd_save_slot_impl(s);
+    pvc_sd_unlock();
+}
+
+static void sd_sync_index_impl(void)
 {
     mkdir(FEED_DIR, 0755);
     FILE *f = fopen(IDX_PATH, "w");
@@ -101,9 +115,25 @@ static void sd_sync_index(void)
     closedir(d);
 }
 
+static void sd_sync_index(void)
+{
+    pvc_sd_lock();
+    sd_sync_index_impl();
+    pvc_sd_unlock();
+}
+
+static void feed_restore_impl(void);
+
 void pvc_feed_init(void)
 {
     lock_init();
+    pvc_sd_lock();
+    feed_restore_impl();
+    pvc_sd_unlock();
+}
+
+static void feed_restore_impl(void)
+{
     FILE *idx = fopen(IDX_PATH, "r");
     if (!idx) return;
 
@@ -128,6 +158,18 @@ void pvc_feed_init(void)
             continue;
         }
         fclose(f);
+        uint32_t rw = 0, rh = 0;
+        if (!pvc_jpeg_intact(buf, (size_t)sz) ||
+            !pvc_jpeg_dims(buf, (size_t)sz, &rw, &rh) || rw != 320 || rh != 240) {
+            /* 崩溃/掉电打断 fwrite 的残缺缓存: 解码出绿色块 (真机实证)。
+             * 删除后本条不入槽 -> 下轮 feed 轮询重新下载 */
+            heap_caps_free(buf);
+            remove(path);
+            snprintf(path, sizeof(path), FEED_DIR "/%s.txt", line);
+            remove(path);
+            PVC_EV("feed_cache_drop id=%s reason=truncated", line);
+            continue;
+        }
 
         slot_t *s = &s_slots[n];
         memset(s, 0, sizeof(*s));
@@ -171,6 +213,7 @@ static int fetch_state(void)
     const cJSON *ju = cJSON_GetObjectItem(j, "unseen_count");
     if (cJSON_IsNumber(ju)) unseen = ju->valueint;
     pvc_config_handle_state((const struct cJSON *)j);
+    pvc_ota_handle_state((const struct cJSON *)j);
     cJSON_Delete(j);
     return unseen;
 }
@@ -280,6 +323,18 @@ int pvc_feed_poll(void)
             if (!buf) continue;
             int len = fetch_image(s->meta.photo_id, buf, JPEG_CAP);
             if (len <= 0) { heap_caps_free(buf); continue; }
+            /* 入槽门禁: 完整 + 确为 QVGA。server 曾下发 1x1 占位图谎称
+             * 320x240 (demo-store), 入槽后显示层才拒绝 -> 提前挡住 */
+            uint32_t iw = 0, ih = 0;
+            if (!pvc_jpeg_intact(buf, (size_t)len) ||
+                !pvc_jpeg_dims(buf, (size_t)len, &iw, &ih) ||
+                iw != 320 || ih != 240) {
+                PVC_EV("feed_img_drop id=%s len=%d dims=%lux%lu",
+                       s->meta.photo_id, len,
+                       (unsigned long)iw, (unsigned long)ih);
+                heap_caps_free(buf);
+                continue;
+            }
             /* 收缩到实际大小 */
             uint8_t *tight = PSRAM_MALLOC((size_t)len);
             if (tight) {

@@ -11,6 +11,10 @@
  *   photo_captured / photo_encoded / upload_queued|sent|drop|defer
  *   feed_poll / feed_err / react_send / config_recv / config_ack
  *   stat (30s 心跳: heap/min_heap/queue/state)
+ * OTA (C20):
+ *   ota_boot (part/state/fw) / ota_avail / ota_start / ota_progress
+ *   ota_done / ota_err (stage/err/fatal) / ota_reboot / ota_valid
+ *   ota_rollback (bad=版本, 升级后被 bootloader 回滚 -> 已拉黑)
  * 性能埋点:
  *   perf_preview (每秒: fps/render_avg_us/cpu_pct/heap; 帧率红线 C13)
  *   perf_photo   (core1 worker: grab/queue/blur/filter/save/total ms; C14)

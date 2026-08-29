@@ -61,6 +61,10 @@ typedef struct {
     /* feed 更新通知 (§3): total=缓存总数, fresh=本次新增,
      * new_likes=本人照片新增被赞数 (仪式感: 飘心/提示音) */
     void (*feed_update)(int total, int fresh, int new_likes);
+    /* WiFi 驱动初始化完成 (BLE 配网时 = 配网成功后)。真机内部 SRAM 紧张:
+     * 相机 DMA 必须等 WiFi(+配网期 BT) 的内部池先占位再开, 由此回调触发
+     * (net 任务上下文)。普通启动延迟 <1s; 配网页无预览本就合理 */
+    void (*wifi_ready)(void);
 } pvc_net_ui_t;
 
 /* 启动联网任务 (NVS init + WiFi STA + 配对 + 上传队列)。ui 可为 NULL。 */
@@ -84,6 +88,13 @@ void pvc_net_signal_feed(void);
  * 在线 + 待传队列已排空 + 本次启动后 feed 至少成功轮询过一次。
  */
 bool pvc_net_synced(void);
+
+/*
+ * 重新配网 (换 WiFi 环境): 清除 NVS 中的 WiFi 凭据并重启 —— 重启后自然
+ * 落入 BLE 配网页 (内存编排要求射频先于相机初始化, 活体切换不可行)。
+ * 配对 token 保留 (仍绑定原账号)。任意任务可调, 不返回。
+ */
+void pvc_net_reprovision(void);
 
 /* 工程模式 (§6): 打印 token 前 8 位 / 状态 / 队列深度 / 堆余量 */
 void pvc_net_debug_dump(void);

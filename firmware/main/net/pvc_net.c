@@ -2,9 +2,11 @@
 #include "pvc_store.h"
 #include "pvc_pair.h"
 #include "pvc_prov.h"
+#include "esp_system.h"    /* esp_restart (重新配网) */
 #include "pvc_upload.h"
 #include "pvc_feed.h"
 #include "pvc_config.h"
+#include "pvc_ota.h"
 #include "pvc_trace.h"
 
 #include <string.h>
@@ -45,6 +47,12 @@ static void set_state(pvc_net_state_t st, const char *detail)
 }
 
 pvc_net_state_t pvc_net_state(void) { return s_state; }
+
+/* OTA 进度 -> 状态栏短文案 (net_task 上下文) */
+static void ota_notify(const char *msg)
+{
+    if (s_ui.status) s_ui.status(s_state, msg);
+}
 
 /* ---------------- WiFi STA ---------------- */
 static bool s_provisioning;    /* BLE 配网期间抑制断线状态刷新 */
@@ -97,6 +105,10 @@ static void wait_wifi(void)
  */
 static esp_err_t wifi_start(void)
 {
+    PVC_EV("heap_wifi internal=%u dma=%u largest=%u",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
@@ -144,11 +156,17 @@ static void net_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    /* WiFi(+配网期 BT) 内部内存已占位: 通知 main 补开相机 (见 pvc_net.h) */
+    if (s_ui.wifi_ready) s_ui.wifi_ready();
+
     wait_wifi();
     ESP_LOGI(TAG, "wifi connected");
 
-    /* SNTP 对时 (§0: 设备本地时间用 SNTP; 失败不致命) */
-    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    /* SNTP 对时 (§0: 设备本地时间用 SNTP; 失败不致命)。
+     * 真机实测: pool.ntp.org 在国内网络常不通 (时钟一直 --:--),
+     * 阿里云 NTP 优先, pool 兜底 */
+    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+        2, ESP_SNTP_SERVER_LIST("ntp.aliyun.com", "pool.ntp.org"));
     esp_netif_sntp_init(&sntp_cfg);
 
     pvc_upload_init();
@@ -196,6 +214,8 @@ static void net_task(void *arg)
             if (fresh >= 0) {
                 last_feed_poll = now;
                 s_feed_synced = true;
+                /* 自检通过 (wifi+认证+state+feed 全通): 新固件落账防回滚 */
+                pvc_ota_mark_valid();
                 if (s_ui.feed_update) {
                     pvc_feed_item_t tmp[PVC_FEED_MAX];
                     s_ui.feed_update(pvc_feed_snapshot(tmp, PVC_FEED_MAX), fresh,
@@ -211,12 +231,30 @@ static void net_task(void *arg)
             continue;
         }
 
+        /* OTA (§3.1 fw_latest): 照片队列已排空才下载, 不与上传抢带宽;
+         * 完成后由 pvc_power 在闲置入睡时改为重启生效 */
+        if (pvc_ota_pending() && pvc_upload_depth() == 0) {
+            if (pvc_ota_process(ota_notify) == PVC_FEED_AUTH) {
+                pvc_store_clear_token();
+                continue;
+            }
+        }
+
         /* 等新照片/feed 信号或周期唤醒 */
         xEventGroupWaitBits(s_ev, BIT_PHOTO | BIT_FEED, pdFALSE, pdFALSE,
                             pdMS_TO_TICKS(r == PVC_UP_RETRY_LATER ? 15000
                                                                   : DRAIN_PERIOD_MS));
         xEventGroupClearBits(s_ev, BIT_PHOTO);
     }
+}
+
+void pvc_net_reprovision(void)
+{
+    PVC_EV("net reprovision=1");
+    printf("[FW] REPROVISION user requested, clearing wifi creds\n");
+    pvc_prov_reset();          /* 清 NVS WiFi 凭据 (token 保留) */
+    vTaskDelay(pdMS_TO_TICKS(300));   /* 让 NVS 提交与日志出完 */
+    esp_restart();
 }
 
 void pvc_net_signal_feed(void)
@@ -226,7 +264,10 @@ void pvc_net_signal_feed(void)
 
 bool pvc_net_synced(void)
 {
-    return s_state == PVC_NET_ONLINE && s_feed_synced && pvc_upload_depth() == 0;
+    /* OTA 待下载/下载中不算同步完 (防 power 在下载启动前的窗口期断电);
+     * reboot_pending 不算: 写好槽后正该走入睡路径 -> 重启生效 */
+    return s_state == PVC_NET_ONLINE && s_feed_synced &&
+           pvc_upload_depth() == 0 && !pvc_ota_pending() && !pvc_ota_busy();
 }
 
 /* ---------------- 公共 API ---------------- */
@@ -238,6 +279,9 @@ esp_err_t pvc_net_start(const pvc_net_ui_t *ui)
 
     esp_err_t err = pvc_store_init();
     if (err != ESP_OK) return err;
+
+    /* 识别 OTA 回滚 / 待验证状态 (依赖 NVS, 须在 store_init 之后) */
+    pvc_ota_boot_check();
 
     /* TLS 握手约需 40KB 堆 (§6)。栈 16KB: fetch_state 栈上 2KB 响应缓冲
      * + feed 槽位数组 ~1.6KB + mbedTLS 握手栈开销, 8KB 有溢出风险 */

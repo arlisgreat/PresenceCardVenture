@@ -13,6 +13,7 @@
 
 #include "esp_log.h"
 #include "esp_camera.h"
+#include "bsp/m5stack_core_s3.h"   /* BSP_I2C_NUM: SCCB 复用 BSP I2C 总线 */
 
 #include "app_camera.h"
 
@@ -28,8 +29,11 @@ esp_err_t app_camera_init(void)
         .pin_pwdn      = -1,
         .pin_reset     = -1,
         .pin_xclk      = -1,
-        .pin_sscb_sda  = 12,
-        .pin_sscb_scl  = 11,
+        /* SCCB 与 PMIC/触摸共用 BSP 的 I2C1 (11/12): 引脚必须 NC +
+         * sccb_i2c_port 复用已装驱动, 自建总线会 acquire fail 且把触摸搞挂
+         * (真机实测: i2c.common acquire bus failed -> 触摸无响应) */
+        .pin_sscb_sda  = -1,
+        .pin_sscb_scl  = -1,
         .pin_d7        = 47,
         .pin_d6        = 48,
         .pin_d5        = 16,
@@ -44,16 +48,18 @@ esp_err_t app_camera_init(void)
         .xclk_freq_hz  = 20000000,
         .ledc_timer    = LEDC_TIMER_0,
         .ledc_channel  = LEDC_CHANNEL_0,
-        .pixel_format  = PIXFORMAT_RGB565,
-        .frame_size    = FRAMESIZE_VGA,    /* 640x480 原生最大, 拍照画质; 预览由 hw2d_scale 降采样 */
+        /* 全链路 YUV 架构: 传感器原生 YCbYCr 直出 (寄存器序 Y Cb Y Cr =
+         * esp_new_jpeg 编码器格式), 拍照零色彩空间往返; RGB565 仅显示边界 */
+        .pixel_format  = PIXFORMAT_YUV422,
+        /* 系统统一 320x240: 采集/预览/拍照零缩放 */
+        .frame_size    = FRAMESIZE_QVGA,
         .jpeg_quality  = 0,
         .fb_count      = 2,                /* 双缓冲, PSRAM */
         .fb_location   = CAMERA_FB_IN_PSRAM,
         .grab_mode     = CAMERA_GRAB_LATEST, /* 预览始终显示最新帧 */
-        .sccb_i2c_port = -1,               /* 复用 M5 In_I2C 释放后的 I2C0? 见下 */
+        .sccb_i2c_port = BSP_I2C_NUM,      /* =1, bsp_display_start 已装驱动 */
     };
 
-    /* CoreS3 的 SCCB 与 M5 In_I2C 共用 I2C0(11/12): BSP 初始化后直接可用 */
     esp_err_t err = esp_camera_init(&camera_config);
     if (err == ESP_OK) {
         s_ready = true;
@@ -62,7 +68,11 @@ esp_err_t app_camera_init(void)
             /* 画质默认值微调: 亮度 +1, 对照度 +1 (GC0308 默认偏暗) */
             s->set_brightness(s, 1);
             s->set_contrast(s, 1);
-            ESP_LOGI(TAG, "GC0308 ready: VGA RGB565 (frame %u)", s->status.framesize);
+            /* 装配方向 180 度: GC0308 CISCTL(0x14) 翻转位真机写不进
+             * (I2C ACK 但读回不变, set_vflip 与裸写均无效) —— 改软件补偿:
+             * 预览 hw2d_yuv_filter_rgb565_rot180 反向写出 (零额外遍历),
+             * 拍照 worker 入口 hw2d_yuv_rot180 原地反转 (~2ms) */
+            ESP_LOGI(TAG, "GC0308 ready: QVGA YUV422 (frame %u)", s->status.framesize);
         }
     } else {
         ESP_LOGE(TAG, "esp_camera_init failed: %s (0x%x), 请检查摄像头排线",

@@ -51,10 +51,13 @@ static void prov_event_cb(void *arg, esp_event_base_t base, int32_t id, void *da
 bool pvc_prov_is_provisioned(void)
 {
     bool provisioned = false;
-    /* manager 未 init 时也可查询: 直接读 NVS 中的 STA 配置 */
+    /* manager 未 init 时也可查询: 直接读 NVS 中的 STA 配置。
+     * 注意: 这里绝不能挂 FREE_BTDM —— 该处理器在 deinit 时把 BT 控制器
+     * 内存一次性释放 (本次启动不可恢复), 之后真配网 BLE init 必崩
+     * (真机实测: btdm_controller_init 失败 -> deinit 路径 LoadProhibited) */
     wifi_prov_mgr_config_t cfg = {
         .scheme = wifi_prov_scheme_ble,
-        .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE,
     };
     if (wifi_prov_mgr_init(cfg) != ESP_OK) return false;
     wifi_prov_mgr_is_provisioned(&provisioned);
@@ -101,9 +104,10 @@ esp_err_t pvc_prov_run(const pvc_net_ui_t *ui)
 
 void pvc_prov_reset(void)
 {
+    /* 同 is_provisioned: 探测式 init/deinit 不得挂 FREE_BTDM */
     wifi_prov_mgr_config_t cfg = {
         .scheme = wifi_prov_scheme_ble,
-        .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE,
     };
     if (wifi_prov_mgr_init(cfg) == ESP_OK) {
         wifi_prov_mgr_reset_provisioning();

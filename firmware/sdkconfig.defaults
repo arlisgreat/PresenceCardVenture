@@ -10,7 +10,9 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# >=512B 的 malloc 优先 PSRAM (真机: BLE 配网时内部堆只差 ~15KB, 中等分配
+# 全挪外部; WiFi/BLE 驱动走显式 heap_caps 内部分配不受影响)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 
 # S3 I/D-Cache 扩容至 32KB: 像素算子 / 滤波 LUT / 缩放行缓冲命中率提升,
 # 对逐像素渲染收益明显 (代价: 片内 SRAM 各减 16KB, CoreS3 仍有 512KB 足够)
@@ -18,8 +20,9 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_32KB=y
 
 # --- 中文字体 (P0: 默认 Montserrat 无 CJK 字形, 中文会渲染为方块) ---
-CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y
-CONFIG_LV_FONT_DEFAULT_SOURCE_HAN_SANS_SC_16_CJK=y
+# 中文用自制 Noto Sans SC 16 (main/pvc_font_cn16.c, tools/make_cn_font.sh):
+# 内置 Source Han 16 CJK 仅 1187 字稀疏子集, UI 用字缺 59 个成乱码, 已弃用
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 
 # --- LVGL 全尺寸缓冲(320x240x2B)放 PSRAM ---
@@ -53,5 +56,40 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 # TLS 握手 ~40KB 堆, mbedTLS 缓冲放 PSRAM 之外的默认堆即可 (CoreS3 SRAM 足够)
 
+# --- 堆完整性 (联调/仿真期开启, 每块前后毒化字节, malloc/free 校验; 发布可关) ---
+CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+
 # --- 日志 ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- OTA (docs/02 §3.1 fw_latest) ---
+# 回滚保护: 新固件首次启动为 PENDING_VERIFY, 自检 (首次 feed 同步成功) 后
+# pvc_ota_mark_valid() 落账; 未落账即重启/崩溃则 bootloader 自动回滚旧槽
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# --- 内部 SRAM 压力 (真机实测: BLE 控制器 init OOM -> IDF deinit 路径崩溃循环) ---
+# NimBLE 主机堆放 PSRAM; WiFi/LWIP 缓冲优先 PSRAM; 显示缓冲已缩至 320x24x2
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# LVGL 用 clib malloc 替代 64KB 内部静态池 (work_mem_int, 真机 .bss 最大头):
+# 小对象经 SPIRAM_MALLOC_ALWAYSINTERNAL 仍走内部, 但 64KB 不再整块占死
+CONFIG_LV_USE_CLIB_MALLOC=y
+# 相机 DMA 必须 16KB: 相机在 WiFi 之后初始化 (内存策略), WiFi 池占位后
+# 内部堆拿不出 32KB 连续 DMA 块 (真机实证: 恢复 32KB 后 esp_camera_init
+# 失败无预览)。绿噪点由管线色度平滑解决, 与 DMA 大小无关
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=24
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+# BLE 仅用于配网 (1 个从连接): 控制器活动数 6->2, 省内部堆
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+
+# 相机任务挪 core1: cam_task 每 16KB DMA 半缓冲做一次 PSRAM 搬运, 在 core0
+# 会持续抢占 LVGL 渲染 (真机实证: 预览融合算子墙钟 39ms, 计算优化无效)
+CONFIG_CAMERA_CORE1=y
+# 全量中文字库: LVGL memfs 驱动 (字体分区 -> PSRAM -> lv_binfont_load)
+CONFIG_LV_USE_FS_MEMFS=y
+CONFIG_LV_FS_MEMFS_LETTER=77
+# 全量字库 2.7MB: 默认 bitmap_index 仅 20 位 (字体上限 1MB), 偏移 >1MB 的
+# 字形全部截断乱码 (美/镜/颜 实证) -> 开大字体模式 (u32 偏移)
+CONFIG_LV_FONT_FMT_TXT_LARGE=y

@@ -17,6 +17,8 @@ extern "C" {
  *        内部注册一个 25FPS LVGL 定时器，每次 tick 抓取最新摄像头帧渲染预览
  */
 void ui_beauty_camera_create(void);
+/* 拍照 worker 延迟启动 (net 层 wifi_ready 后, 与相机一起); 幂等 */
+void ui_start_photo_worker(void);
 
 /*
  * 联网层 UI 桥 (pvc_net 回调用, 内部自行 bsp_display_lock, 任意任务可调):

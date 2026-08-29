@@ -28,6 +28,16 @@ token `demo-token` 等)输配对码、看照片、下发配置。
 - 一台绑定了另一账号(好友)的 web 会话,用于触发 feed / 配置下发
 - server 侧操作全部可用 curl 脚本化(见各用例"触发方式")
 
+## 上板前仿真回归(无硬件)
+
+```bash
+test/host/run_asan.sh        # host UBSAN + 哨兵红区: hw2d 单测 + 40 轮管线仿真
+test/qemu/run.sh             # QEMU esp32s3: 真 Xtensa 代码, esp_new_jpeg 编解码
+                             # 回环 + 字节序哨兵 + IDF 堆毒化完整性 (C 级判据)
+```
+(部分 macOS 环境 Apple clang ASAN 会卡死于 dyld——hello-world 即复现;
+该环境用默认 UBSAN 模式,越界由 UBSAN+红区+QEMU 堆毒化三层兜底)
+
 ## 用例
 
 | # | 用例 | 触发方式 | 期望日志(analyzer 检查) |
@@ -50,6 +60,8 @@ token `demo-token` 等)输配对码、看照片、下发配置。
 | T17 | 到达仪式感 | 好友上传一张 (设备亮屏与灭屏各测一次) | `[EV] arrival fresh=N shown=1`; 亮屏 + ding 音 + 自动展示 3s 后收起; 期间触摸则保留页面; `sound id=1` |
 | T18 | 配文与点赞 | 拍照后 6s 内选短语; 好友页双击照片; 用 web 给设备照片点赞 | `caption sel=N`+`caption used=1`+server 端照片带 caption; `like via=double_tap`+`react_send`; 下轮轮询 `likes new=N`+飘字+`sound id=2` |
 | T19 | 贴纸跟脸 | 开贴纸对准人脸移动/离开画面 | `face_init ok=1`; `perf_face ms= faces=`(C19, avg<300ms); 贴纸随脸移动, 无脸 2s 后回落固定位; 检测期间预览帧率无明显下降(C13) |
+| T21 | 重新配网 | 设备已配网但移出原 WiFi 范围 (状态栏 Off/WiFi..);3 秒内点状态文字两次 | 首次点出 toast「再点一次重新配网」;二次点 `[FW] REPROVISION` → 重启 → `[FW] PROV ble` 配网页;配网成功后原配对 token 仍有效 (无需重新配对);在线状态点击无响应 |
+| T20 | OTA 升级 | server 在 `/device/state` 下发 `fw_latest{version,url,md5}`(高于当前版本);设备在线等一轮轮询 | `ota_avail` → `ota_start` → `ota_progress` ×N → `ota_done` → 闲置 60s → `[FW] OTA_REBOOT` → 新固件 `ota_boot state=1`(PENDING_VERIFY)→ 首次 feed 同步后 `ota_valid`(C20);故意给错 md5:`ota_err stage=md5 fatal=1` 且**不再重试同版本**;拔电重启新固件未联网前:bootloader 回滚 + `ota_rollback bad=` |
 | T15 | 性能基准 | 预览静置 60s → 逐个切 6 种滤镜各 10s → 开贴纸 10s → 连拍 5 张 → 好友页翻 8 张 | `perf_preview` 帧率红线(C13):目标 25fps,均值 <20 WARN、<10 FAIL;`perf_photo`/`perf_encode` 快门→入队 avg<3s(C14);`perf_feed_decode` 单张 <500ms;滤镜/贴纸开启前后帧率差记录在报告里 |
 
 ## 真机专项验证(非自动判定,人工看一次)

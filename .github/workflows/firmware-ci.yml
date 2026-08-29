@@ -1,5 +1,15 @@
 name: firmware-ci
 on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: Optional API base baked into a hardware test build
+        required: false
+        type: string
+      web_base:
+        description: Optional Web base used by the pairing QR code
+        required: false
+        type: string
   pull_request:
     paths: ['firmware/**']
   push:
@@ -14,11 +24,59 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
       - run: pip install platformio
-      - run: pio run
+      - name: Build CoreS3 firmware
+        env:
+          PVC_API_BASE_INPUT: ${{ inputs.api_base || '' }}
+          PVC_WEB_BASE_INPUT: ${{ inputs.web_base || '' }}
+        run: |
+          if [ -n "$PVC_API_BASE_INPUT" ]; then
+            export PLATFORMIO_BUILD_UNFLAGS='-D PVC_API_BASE=\"https://api-dev.example.com/v1\"'
+            printf -v PLATFORMIO_BUILD_FLAGS '%s\n%s\n%s\n%s' \
+              "-D PVC_API_BASE=\\\"${PVC_API_BASE_INPUT}\\\"" \
+              "-D PVC_WEB_BASE=\\\"${PVC_WEB_BASE_INPUT}\\\"" \
+              '-D PVC_IDLE_SLEEP_MS=3600000' \
+              '-D PVC_TOUCH_INT_GPIO=-1'
+            export PLATFORMIO_BUILD_FLAGS
+          fi
+          pio run -e cores3
         working-directory: firmware
-      # 硬件交付烧录说明与真机验收记录。
+      - name: Create audited flash manifest
+        run: |
+          printf '%s\n' \
+            '--flash_mode dio --flash_freq 80m --flash_size 16MB' \
+            '0x0 bootloader.bin' \
+            '0x8000 partitions.bin' \
+            '0x20000 firmware.bin' \
+            > .pio/build/cores3/pvc_flash_args
+        working-directory: firmware
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware-bin
-          path: firmware/.pio/build/*/firmware.bin
+          name: firmware-flash
+          path: |
+            firmware/.pio/build/cores3/bootloader.bin
+            firmware/.pio/build/cores3/partitions.bin
+            firmware/.pio/build/cores3/firmware.bin
+            firmware/.pio/build/cores3/pvc_flash_args
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-debug
+          path: |
+            firmware/.pio/build/cores3/firmware.elf
+          retention-days: 30
+
+  # host 端算法压测: Linux 上 ASAN 可用 (macOS Apple clang ASAN 有环境性
+  # dyld 卡死, 本地默认走 UBSAN; 真 ASAN 由本 job 每次 PR 兜底)
+  host-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: UBSAN + guard bands
+        run: ./test/host/run_asan.sh
+        working-directory: firmware
+      - name: ASAN + UBSAN (20 万次 SOF 模糊)
+        run: CFLAGS_EXTRA=-DFUZZ_ITERS=200000 ./test/host/run_asan.sh asan
+        working-directory: firmware
+      - name: TSAN 并发契约 (预览/worker 双线程)
+        run: ./test/host/run_asan.sh tsan
+        working-directory: firmware
