@@ -699,6 +699,10 @@ static void open_caption_panel(void)
                             (void *)(intptr_t)i);
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, k_phrases[i]);
+        /* 5 字 x16px = 80px 超按钮宽 74: 限宽换行居中, 不截字 */
+        lv_obj_set_width(l, 70);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(l, lv_color_white(), 0);
         lv_obj_center(l);
     }
@@ -769,14 +773,17 @@ static void on_filter_click(lv_event_t *e)
     update_status();
 }
 
+static const char *filter_name(int f);
+
 static void open_filter_panel(void)
 {
+    /* 10 项 (6 基础 + 4 CCD 机型) 超出屏宽, 横向滑动选择 */
     lv_obj_t *p = panel_create(56);
-    static const char *const names[HW2D_FILTER_MAX] = {
-        "原图", "净白", "暖阳", "冷调", "黑白", "复古"
-    };
-    for (int i = 0; i < HW2D_FILTER_MAX; i++) {
-        panel_item(p, names[i], i, 6 + i * 52, on_filter_click, i);
+    lv_obj_set_scroll_dir(p, LV_DIR_HOR);
+    lv_obj_set_scrollbar_mode(p, LV_SCROLLBAR_MODE_AUTO);
+    for (int i = 0; i < FILTER_EXT_COUNT; i++) {
+        panel_item(p, filter_name(i), i < HW2D_FILTER_MAX ? i : -1,
+                   6 + i * 52, on_filter_click, i);
     }
 }
 
@@ -1237,7 +1244,9 @@ static void update_status(void)
 {
     if (s_status_c) {
         char s[40];
-        snprintf(s, sizeof(s), "美颜·%s", filter_name(s_filter));
+        /* 注意: 状态栏文案只能用 ASCII + CJK —— Source Han 16 CJK 字体
+         * cmap 无 Latin-1 补充区 ('·' U+00B7)/省略号/LV_SYMBOL, 会成乱码 */
+        snprintf(s, sizeof(s), "美颜 %s", filter_name(s_filter));
         lv_label_set_text(s_status_c, s);
     }
     if (s_card_white) {
@@ -1563,7 +1572,7 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_bg_opa(f_prev, LV_OPA_40, 0);
     lv_obj_add_event_cb(f_prev, on_feed_prev, LV_EVENT_CLICKED, NULL);
     lv_obj_t *f_prev_l = lv_label_create(f_prev);
-    lv_label_set_text(f_prev_l, LV_SYMBOL_LEFT);
+    lv_label_set_text(f_prev_l, "<");   /* LV_SYMBOL 在 CJK 字体下缺字 */
     lv_obj_center(f_prev_l);
 
     lv_obj_t *f_next = lv_btn_create(s_feed_panel);
@@ -1572,12 +1581,12 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_bg_opa(f_next, LV_OPA_40, 0);
     lv_obj_add_event_cb(f_next, on_feed_next, LV_EVENT_CLICKED, NULL);
     lv_obj_t *f_next_l = lv_label_create(f_next);
-    lv_label_set_text(f_next_l, LV_SYMBOL_RIGHT);
+    lv_label_set_text(f_next_l, ">");
     lv_obj_center(f_next_l);
 
     lv_obj_t *f_heart = lv_btn_create(s_feed_panel);
-    lv_obj_set_size(f_heart, 52, 28);
-    lv_obj_set_pos(f_heart, UI_W - 60, 6);
+    lv_obj_set_size(f_heart, 64, 30);          /* "点赞" 2x16px + 内边距 */
+    lv_obj_set_pos(f_heart, UI_W - 72, 6);
     lv_obj_set_style_bg_color(f_heart, lv_color_make(0xe8, 0x4a, 0x4a), 0);
     lv_obj_add_event_cb(f_heart, on_feed_heart, LV_EVENT_CLICKED, NULL);
     lv_obj_t *f_heart_l = lv_label_create(f_heart);

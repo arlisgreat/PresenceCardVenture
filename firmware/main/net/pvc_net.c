@@ -161,8 +161,11 @@ static void net_task(void *arg)
     wait_wifi();
     ESP_LOGI(TAG, "wifi connected");
 
-    /* SNTP 对时 (§0: 设备本地时间用 SNTP; 失败不致命) */
-    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    /* SNTP 对时 (§0: 设备本地时间用 SNTP; 失败不致命)。
+     * 真机实测: pool.ntp.org 在国内网络常不通 (时钟一直 --:--),
+     * 阿里云 NTP 优先, pool 兜底 */
+    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+        2, ESP_SNTP_SERVER_LIST("ntp.aliyun.com", "pool.ntp.org"));
     esp_netif_sntp_init(&sntp_cfg);
 
     pvc_upload_init();
