@@ -232,6 +232,32 @@ void pvc_algo_test_run(void)
         }
     }
 
+    /* ================= 浸泡段: 编码器 open/close x200 泄漏检测 ================= */
+    {
+        size_t heap0 = esp_get_free_heap_size();
+        for (int it = 0; it < 200; it++) {
+            uint8_t *yuyv = (uint8_t *)frame;
+            for (size_t i = 0; i < npix * 2; i += 4) {
+                yuyv[i] = (uint8_t)(it + (i >> 3)); yuyv[i + 1] = 120;
+                yuyv[i + 2] = (uint8_t)(it + (i >> 3)); yuyv[i + 3] = 136;
+            }
+            size_t jn = pvc_jpeg_encode_yuv422(yuyv, w, h, 60, enc, 128 * 1024);
+            if (!jn || !jpg2rgb565(enc, jn, dec, JPG_SCALE_NONE)) {
+                CHECK(0, "soak encode/decode it=%d", it);
+                break;
+            }
+            if ((it % 50) == 49) {
+                printf("[ALGO] soak it=%d heap=%u\n", it,
+                       (unsigned)esp_get_free_heap_size());
+            }
+        }
+        size_t heap1 = esp_get_free_heap_size();
+        long drift = (long)heap0 - (long)heap1;
+        CHECK(drift < 2048, "soak heap leak: drift=%ld bytes", drift);
+        printf("[ALGO] soak done heap_drift=%ld\n", drift);
+        CHECK(heap_caps_check_integrity_all(true), "soak heap corrupt");
+    }
+
     printf("[ALGO] min_heap=%u stack_hw=%u\n",
            (unsigned)esp_get_minimum_free_heap_size(),
            (unsigned)uxTaskGetStackHighWaterMark(NULL));

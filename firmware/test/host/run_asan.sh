@@ -13,10 +13,17 @@ set -e
 export MallocNanoZone=0
 SAN="undefined"
 [ "$1" = "asan" ] && SAN="address,undefined"
+[ "$1" = "tsan" ] && SAN="thread"
 OUT=${TMPDIR:-/tmp}/pvc_host_test
-CFLAGS="-O1 -g -Wall -fsanitize=$SAN -fno-sanitize-recover=all -fno-omit-frame-pointer -I main"
-"${CC:-cc}" $CFLAGS -o "$OUT-hw2d" test/host/test_hw2d.c main/hw2d.c
-"${CC:-cc}" $CFLAGS -o "$OUT-pipe" test/host/test_pipeline.c main/hw2d.c main/pvc_jpeg_dims.c
-"$OUT-hw2d"
-"$OUT-pipe"
+CFLAGS="-O1 -g -Wall -fsanitize=$SAN -fno-sanitize-recover=all -fno-omit-frame-pointer -I main ${CFLAGS_EXTRA:-}"
+if [ "$1" = "tsan" ]; then
+  # TSAN: 并发契约压测 (预览/worker 双线程各持 LUT 上下文)
+  "${CC:-cc}" $CFLAGS -o "$OUT-thr" test/host/test_threads.c main/hw2d.c -lpthread
+  "$OUT-thr"
+else
+  "${CC:-cc}" $CFLAGS -o "$OUT-hw2d" test/host/test_hw2d.c main/hw2d.c
+  "${CC:-cc}" $CFLAGS -o "$OUT-pipe" test/host/test_pipeline.c main/hw2d.c main/pvc_jpeg_dims.c
+  "$OUT-hw2d"
+  "$OUT-pipe"
+fi
 echo "sanitizer($SAN): ALL PASS"

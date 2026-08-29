@@ -144,7 +144,10 @@ int main(void)
     {
         uint8_t jbuf[512];
         uint32_t jw, jh;
-        for (int it = 0; it < 200; it++) {
+#ifndef FUZZ_ITERS
+#define FUZZ_ITERS 200
+#endif
+        for (int it = 0; it < FUZZ_ITERS; it++) {
             srand(9000 + it);
             size_t len = (size_t)(rand() % sizeof(jbuf));
             for (size_t i = 0; i < len; i++) jbuf[i] = (uint8_t)rand();
