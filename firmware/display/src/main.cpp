@@ -1486,6 +1486,7 @@ bool ensureWifi() {
   setStatus("WIFI CONNECTING", PVC_WIFI_SSID);
   WiFi.disconnect(false, false);
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);  // 手机热点 DTIM 长，modem 省电会把请求拖到秒级甚至连不上
   WiFi.begin(PVC_WIFI_SSID, PVC_WIFI_PASSWORD);
   const uint32_t deadline = millis() + 12000;
   while (WiFi.status() != WL_CONNECTED && !timeReached(millis(), deadline)) {
