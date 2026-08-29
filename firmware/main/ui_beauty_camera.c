@@ -54,6 +54,7 @@
 #include "pvc_store.h"      /* boot 计数: 相册文件名跨重启唯一 */
 #include "pvc_clock.h"
 #include "pvc_jpeg.h"
+#include "ccd_assets/ccd_luts.h"
 #include "pvc_sound.h"
 #include "pvc_face.h"
 #include "pvc_trace.h"
@@ -106,8 +107,10 @@ static uint16_t   *s_canvas_buf;           /* canvas 缓冲 (PSRAM) */
 /* 渲染节流: 每 ~8 帧 (320ms) 刷新一次滤镜缩略图 */
 static uint32_t s_frame_cnt = 0;
 
-/* 滤镜 / 美颜 / 贴纸 */
-static hw2d_filter_id_t s_filter = HW2D_FILTER_ORIGINAL;
+/* 滤镜 / 美颜 / 贴纸。扩展索引: 0..5 基础(hw2d 参数式), 6..9 CCD 机型(3D LUT) */
+#define FILTER_CCD_BASE  HW2D_FILTER_MAX
+#define FILTER_EXT_COUNT (HW2D_FILTER_MAX + CCD_CAM_COUNT)
+static int s_filter = 0;
 static int s_white = 40;                   /* 美白 0-100 */
 static int s_smooth = 40;                  /* 磨皮 0-100 (拍照时) */
 static int s_sticker = -1;                 /* -1 = 无贴纸 */
@@ -178,7 +181,9 @@ static void toast_show(const char *msg)
 /* ================= 滤镜参数 ================= */
 static void update_active_filter(void)
 {
-    const hw2d_filter_t *b = hw2d_filter_get(s_filter);
+    const hw2d_filter_t *b = (s_filter >= FILTER_CCD_BASE)
+        ? &k_ccd_cams[s_filter - FILTER_CCD_BASE].preview
+        : hw2d_filter_get((hw2d_filter_id_t)s_filter);
     /* 美白: 亮度偏置 + 微降饱和 */
     s_active_filter = *b;
     s_active_filter.bias = (int8_t)((int)b->bias + (s_white * 18) / 100);
@@ -391,6 +396,12 @@ static const char *const k_filter_api_id[HW2D_FILTER_MAX] = {
     "none", "none", "warm", "vivid", "bw", "film"
 };
 
+static const char *filter_api_id(int idx)
+{
+    if (idx >= FILTER_CCD_BASE) return k_ccd_cams[idx - FILTER_CCD_BASE].api_id;
+    return k_filter_api_id[idx];
+}
+
 /* ================= 拍照后处理 worker (core 1) ================= */
 /*
  * 快门 (LVGL/core0) 只做抓帧拷贝, 重活 (磨皮/滤镜/q90 存卡/缩放/编码/入队)
@@ -411,7 +422,7 @@ typedef struct {
     int           sticker;     /* 贴纸合成进照片 (-1 = 无) */
     pvc_face_box_t fbox;       /* 快门时刻人脸框快照 (无效则固定位) */
     bool          fbox_valid;
-    hw2d_filter_id_t fid;
+    int           fid;       /* 扩展滤镜索引 (含 CCD) */
     uint32_t      seq;
     int64_t       t_shutter;
     int           grab_ms;
@@ -474,8 +485,22 @@ static void photo_worker(void *arg)
         static hw2d_yuv_luts_t s_wk_luts;      /* worker 单任务专用 */
         hw2d_yuv_blur_y(yuyv, yuyv, pw, ph, (uint8_t)job.smooth);
         int64_t t_blur = esp_timer_get_time();
-        hw2d_yuv_build_luts(&job.filter, &s_wk_luts);
-        hw2d_yuv_filter(yuyv, yuyv, pw * ph, &s_wk_luts);
+        if (job.fid >= FILTER_CCD_BASE) {
+            /* CCD 机型: 全保真 3D LUT + 颗粒 + 暗角 (预览仅是 1D 近似) */
+            const ccd_cam_t *cam = &k_ccd_cams[job.fid - FILTER_CCD_BASE];
+            hw2d_yuv_3dlut(yuyv, pw * ph, cam->lut, CCD_LUT_N);
+            if (job.white > 0) {           /* 美白叠加: Y 偏置 */
+                hw2d_filter_t wf = *hw2d_filter_get(HW2D_FILTER_ORIGINAL);
+                wf.bias = (int8_t)((job.white * 18) / 100);
+                hw2d_yuv_build_luts(&wf, &s_wk_luts);
+                hw2d_yuv_filter(yuyv, yuyv, pw * ph, &s_wk_luts);
+            }
+            hw2d_yuv_grain(yuyv, pw, ph, cam->grain, cam->grain_hl, job.seq + 7);
+            hw2d_yuv_vignette(yuyv, pw, ph, cam->vignette);
+        } else {
+            hw2d_yuv_build_luts(&job.filter, &s_wk_luts);
+            hw2d_yuv_filter(yuyv, yuyv, pw * ph, &s_wk_luts);
+        }
         if (job.sticker >= 0) {                /* 贴纸进照片 (与预览同几何) */
             int bx = 60, by = 40, bw2 = 200, bh = 120, rr = 21;
             if (job.fbox_valid) {
@@ -544,8 +569,8 @@ static void photo_worker(void *arg)
             }
             PVC_EV("caption used=%d", (int)(caption[0] != 0));
             PVC_EV("photo_encoded bytes=%u filter=%s beauty=%d",
-                   (unsigned)jlen, k_filter_api_id[job.fid], job.white);
-            pvc_net_enqueue_photo(s_wk_enc, jlen, k_filter_api_id[job.fid],
+                   (unsigned)jlen, filter_api_id(job.fid), job.white);
+            pvc_net_enqueue_photo(s_wk_enc, jlen, filter_api_id(job.fid),
                                   job.white, caption);  /* enqueue 内部拷贝 */
         } else {
             ESP_LOGE(TAG, "jpeg encode failed or oversize");
@@ -737,7 +762,7 @@ static void panel_item(lv_obj_t *panel, const char *txt, int thumb_idx,
 /* ---------- 滤镜面板 ---------- */
 static void on_filter_click(lv_event_t *e)
 {
-    s_filter = (hw2d_filter_id_t)(intptr_t)lv_event_get_user_data(e);
+    s_filter = (int)(intptr_t)lv_event_get_user_data(e);
     update_active_filter();
     s_thumb_dirty = true;
     close_panel();
@@ -1199,11 +1224,12 @@ static void clock_timer_cb(lv_timer_t *t)
 }
 
 /* ================= 状态栏 / 卡片 ================= */
-static const char *filter_name(hw2d_filter_id_t f)
+static const char *filter_name(int f)
 {
     static const char *const n[HW2D_FILTER_MAX] = {
         "原图", "净白", "暖阳", "冷调", "黑白", "复古"
     };
+    if (f >= FILTER_CCD_BASE) return k_ccd_cams[f - FILTER_CCD_BASE].name;
     return n[f];
 }
 

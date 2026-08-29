@@ -187,6 +187,25 @@ void hw2d_yuv_blend_circle(uint8_t *yuyv, uint32_t w, uint32_t h,
 void hw2d_yuv_extract_y(uint8_t *dst_gray, const uint8_t *src, uint32_t npix);
 
 /* ------------------------------------------------------------------ */
+/* CCD 机型滤镜 (拍照链专用, 全保真路径)                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 三维 LUT 调色 (原地): 逐像素 YUV->RGB (BT.601) -> N^3 三线性查表
+ * -> RGB->YUV 写回。lut 为 [b][g][r][rgb] 序 RGB888, 每轴 n 采样。
+ * QVGA 约 100-200ms, 仅在 worker 拍照链使用 (预览走 1D 近似参数)。
+ */
+void hw2d_yuv_3dlut(uint8_t *yuyv, uint32_t npix, const uint8_t *lut, int n);
+
+/* 胶片颗粒 (原地, 仅加于 Y): amount=噪声峰值, highlights=亮部权重 0-100,
+ * seed 决定颗粒图案 (同 seed 可复现) */
+void hw2d_yuv_grain(uint8_t *yuyv, uint32_t w, uint32_t h,
+                    uint8_t amount, uint8_t highlights, uint32_t seed);
+
+/* 暗角 (原地, 仅衰减 Y): strength 0-100, 边角处 Y 衰减至 (100-strength)% */
+void hw2d_yuv_vignette(uint8_t *yuyv, uint32_t w, uint32_t h, uint8_t strength);
+
+/* ------------------------------------------------------------------ */
 /* 16bit 车道字节交换 (RGB565 小端 <-> 大端)                            */
 /* ------------------------------------------------------------------ */
 

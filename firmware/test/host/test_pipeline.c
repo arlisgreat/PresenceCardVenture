@@ -140,6 +140,51 @@ int main(void)
               "gray convert got %d,%d,%d", r, g, b);
     }
 
+    /* ---- CCD 算子: 恒等 3D LUT 近直通 / 颗粒有界 / 暗角单调 ---- */
+    {
+        enum { LN = 25 };
+        static uint8_t lut[LN * LN * LN * 3];
+        for (int b = 0; b < LN; b++)
+            for (int g = 0; g < LN; g++)
+                for (int r = 0; r < LN; r++) {
+                    uint8_t *p = lut + (((size_t)b * LN + g) * LN + r) * 3;
+                    p[0] = (uint8_t)(r * 255 / (LN - 1));
+                    p[1] = (uint8_t)(g * 255 / (LN - 1));
+                    p[2] = (uint8_t)(b * 255 / (LN - 1));
+                }
+        static uint8_t yuyv[NPIX * 2], ybak[NPIX * 2];
+        /* 输入必须在 RGB 色域内 (随机 YUV 多在域外, 钳位后不可逆):
+         * 随机 RGB 正向生成 YUYV, 保证 YUV->RGB->YUV 往返可逆 */
+        srand(555);
+        for (size_t i = 0; i < NPIX; i += 2) {
+            int r = rand() & 255, g = rand() & 255, b = rand() & 255;
+            int y = (77 * r + 150 * g + 29 * b) >> 8;
+            int cb = 128 + (((b - y) * 144) >> 8);
+            int cr = 128 + (((r - y) * 183) >> 8);
+            yuyv[i * 2] = (uint8_t)y;
+            yuyv[i * 2 + 1] = (uint8_t)cb;
+            yuyv[i * 2 + 2] = (uint8_t)y;
+            yuyv[i * 2 + 3] = (uint8_t)cr;
+        }
+        memcpy(ybak, yuyv, sizeof(yuyv));
+        hw2d_yuv_3dlut(yuyv, NPIX, lut, LN);
+        /* 恒等 LUT: YUV->RGB->LUT->YUV 往返, 允许量化/插值误差 */
+        long maxd = 0;
+        for (size_t i = 0; i < sizeof(yuyv); i++) {
+            long d = labs((long)yuyv[i] - ybak[i]);
+            if (d > maxd) maxd = d;
+        }
+        CHECK(maxd <= 8, "identity 3dlut max delta=%ld", maxd);
+
+        hw2d_yuv_grain(yuyv, W, H, 12, 99, 7);       /* 有界: 不崩即可+范围 */
+        hw2d_yuv_vignette(yuyv, W, H, 30);
+        /* 暗角: 角点 Y 必须 <= 中心 Y (同亮度输入下) */
+        for (size_t i = 0; i < sizeof(yuyv); i += 2) yuyv[i] = 180;
+        hw2d_yuv_vignette(yuyv, W, H, 30);
+        int y_corner = yuyv[0], y_center = yuyv[((size_t)(H / 2) * W + W / 2) * 2];
+        CHECK(y_corner < y_center, "vignette corner=%d center=%d", y_corner, y_center);
+    }
+
     /* ---- SOF 解析器: 随机与截断输入不越界、构造头正确解析 ---- */
     {
         uint8_t jbuf[512];

@@ -528,6 +528,104 @@ void hw2d_yuv_extract_y(uint8_t *dst_gray, const uint8_t *src, uint32_t npix)
     for (uint32_t i = 0; i < npix; i++) dst_gray[i] = src[i * 2];
 }
 
+/* ------------------------------------------------------------------ */
+/* CCD 机型滤镜算子                                                     */
+/* ------------------------------------------------------------------ */
+
+/* RGB888 -> YCbCr (BT.601 全范围, Q8 定点) */
+static inline void rgb2yuv(int r, int g, int b, uint8_t *y, uint8_t *cb, uint8_t *cr)
+{
+    *y  = clamp_u8((77 * r + 150 * g + 29 * b) >> 8);
+    *cb = clamp_u8(128 + (((b - (int)*y) * 144) >> 8));
+    *cr = clamp_u8(128 + (((r - (int)*y) * 183) >> 8));
+}
+
+/* 单像素 N^3 三线性查表: rgb 入, rgb 出 (Q16 定点权重) */
+static inline void lut3d_sample(const uint8_t *lut, int n, int r, int g, int b,
+                                int *ro, int *go, int *bo)
+{
+    int m = n - 1;
+    int rp = r * m, gp = g * m, bp = b * m;      /* 0..255*m */
+    int r0 = rp >> 8, g0 = gp >> 8, b0 = bp >> 8;
+    int fr = rp & 255, fg = gp & 255, fb = bp & 255;
+    int r1 = r0 < m ? r0 + 1 : m;
+    int g1 = g0 < m ? g0 + 1 : m;
+    int b1 = b0 < m ? b0 + 1 : m;
+    long acc[3] = { 0, 0, 0 };
+    for (int bi = 0; bi < 2; bi++) {
+        int bb = bi ? b1 : b0, wb = bi ? fb : 256 - fb;
+        for (int gi = 0; gi < 2; gi++) {
+            int gg = gi ? g1 : g0, wg = gi ? fg : 256 - fg;
+            for (int ri = 0; ri < 2; ri++) {
+                int rr = ri ? r1 : r0, wr = ri ? fr : 256 - fr;
+                const uint8_t *p = lut + (((size_t)bb * n + gg) * n + rr) * 3;
+                long w = (long)wb * wg * wr;      /* <= 2^24 */
+                acc[0] += p[0] * w;
+                acc[1] += p[1] * w;
+                acc[2] += p[2] * w;
+            }
+        }
+    }
+    *ro = (int)(acc[0] >> 24);
+    *go = (int)(acc[1] >> 24);
+    *bo = (int)(acc[2] >> 24);
+}
+
+void hw2d_yuv_3dlut(uint8_t *yuyv, uint32_t npix, const uint8_t *lut, int n)
+{
+    uint32_t np = npix & ~1u;
+    for (uint32_t i = 0; i < np; i += 2) {
+        uint8_t *p = yuyv + i * 2;
+        int cb = p[1], cr = p[3];
+        for (int k = 0; k < 2; k++) {
+            int y = p[k * 2];
+            int c = cb - 128, d = cr - 128;
+            int r = clamp_u8(y + ((359 * d) >> 8));
+            int g = clamp_u8(y - ((88 * c + 183 * d) >> 8));
+            int b = clamp_u8(y + ((454 * c) >> 8));
+            int ro, go, bo;
+            lut3d_sample(lut, n, r, g, b, &ro, &go, &bo);
+            uint8_t ny, ncb, ncr;
+            rgb2yuv(ro, go, bo, &ny, &ncb, &ncr);
+            p[k * 2] = ny;
+            if (k == 0) { p[1] = ncb; p[3] = ncr; }   /* 色度取首像素结果 */
+        }
+    }
+}
+
+void hw2d_yuv_grain(uint8_t *yuyv, uint32_t w, uint32_t h,
+                    uint8_t amount, uint8_t highlights, uint32_t seed)
+{
+    if (!amount) return;
+    uint32_t rnd = seed * 2654435761u + 12345u;
+    uint32_t npix = w * h;
+    for (uint32_t i = 0; i < npix; i++) {
+        rnd = rnd * 1664525u + 1013904223u;
+        int y = yuyv[i * 2];
+        /* 亮部权重: w = 1 + hl% * (Y/255 - 0.5), Q8 */
+        int wq = 256 + ((int)highlights * ((y << 8) / 255 - 128)) / 100 / 1;
+        int noise = ((int)((rnd >> 16) & 0xFF) - 128) * amount / 128;
+        yuyv[i * 2] = clamp_u8(y + ((noise * wq) >> 8));
+    }
+}
+
+void hw2d_yuv_vignette(uint8_t *yuyv, uint32_t w, uint32_t h, uint8_t strength)
+{
+    if (!strength) return;
+    int cx = (int)w / 2, cy = (int)h / 2;
+    long rmax2 = (long)cx * cx + (long)cy * cy;
+    for (uint32_t y = 0; y < h; y++) {
+        long dy2 = (long)((int)y - cy) * ((int)y - cy);
+        uint8_t *row = yuyv + (size_t)y * w * 2;
+        for (uint32_t x = 0; x < w; x++) {
+            long d2 = (long)((int)x - cx) * ((int)x - cx) + dy2;
+            /* 衰减 = 1 - strength% * (d2/rmax2)^1 (平方场近似) */
+            int att = 256 - (int)((long)strength * 256 * d2 / rmax2 / 100);
+            row[x * 2] = (uint8_t)((row[x * 2] * att) >> 8);
+        }
+    }
+}
+
 /* ================================================================== */
 /* 16bit 车道字节交换 (LE<->BE)                                        */
 /* ================================================================== */

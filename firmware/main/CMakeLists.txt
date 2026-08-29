@@ -32,6 +32,20 @@ if(EXISTS ${pvc_face_dir}/models/s3 AND NOT EXISTS ${pvc_sfile})
     endif()
 endif()
 
+# CCD 3D LUT 嵌入: 同 espdl 问题 (PIO 不执行 build 期 embed custom command),
+# 配置期用 IDF 官方 data_file_embed_asm.cmake 预生成 .S
+idf_build_get_property(pvc_idf_path IDF_PATH)
+foreach(pvc_l3d f100 z30 a620 m532)
+    set(pvc_src ${CMAKE_CURRENT_SOURCE_DIR}/ccd_assets/ccd_${pvc_l3d}.l3d)
+    set(pvc_s   ${pvc_build_dir}/ccd_${pvc_l3d}.l3d.S)
+    if(EXISTS ${pvc_src} AND (NOT EXISTS ${pvc_s} OR ${pvc_src} IS_NEWER_THAN ${pvc_s}))
+        execute_process(COMMAND ${CMAKE_COMMAND}
+            -D DATA_FILE=${pvc_src} -D SOURCE_FILE=${pvc_s} -D FILE_TYPE=BINARY
+            -P ${pvc_idf_path}/tools/cmake/scripts/data_file_embed_asm.cmake
+            WORKING_DIRECTORY ${pvc_build_dir})
+    endif()
+endforeach()
+
 idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                             "ui_beauty_camera.c" "pvc_power.c" "pvc_clock.c"
                             "pvc_jpeg.c" "pvc_jpeg_dims.c" "pvc_sound.c" "pvc_algo_test.c" "pvc_face.cpp"
@@ -39,6 +53,10 @@ idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                             "net/pvc_pair.c" "net/pvc_upload.c" "net/pvc_prov.c"
                             "net/pvc_feed.c" "net/pvc_config.c"
                        INCLUDE_DIRS "." "net"
+                       EMBED_FILES "ccd_assets/ccd_f100.l3d"
+                                   "ccd_assets/ccd_z30.l3d"
+                                   "ccd_assets/ccd_a620.l3d"
+                                   "ccd_assets/ccd_m532.l3d"
                        PRIV_REQUIRES esp_wifi esp_netif esp_event nvs_flash
                                      esp_http_client esp-tls mbedtls json esp_timer
                                      wifi_provisioning bt driver esp_driver_i2c)

@@ -232,6 +232,31 @@ void pvc_algo_test_run(void)
         }
     }
 
+    /* ================= CCD 段: 真 F100 LUT + 颗粒/暗角 + 编码回环 ============ */
+    {
+        extern const uint8_t ccd_f100_l3d_start[]
+            asm("_binary_ccd_f100_l3d_start");
+        uint8_t *yuyv = (uint8_t *)frame;
+        for (uint32_t y = 0; y < h; y++) {          /* 平滑肤色域测试图 */
+            uint8_t *row = yuyv + (size_t)y * w * 2;
+            for (uint32_t x = 0; x < w; x += 2) {
+                uint8_t Y0 = (uint8_t)(120 + (x * 80) / w);
+                row[x * 2] = Y0; row[x * 2 + 1] = 118;
+                row[x * 2 + 2] = Y0; row[x * 2 + 3] = 150;
+            }
+        }
+        hw2d_yuv_3dlut(yuyv, npix, ccd_f100_l3d_start, 25);
+        hw2d_yuv_grain(yuyv, w, h, 12, 99, 42);
+        hw2d_yuv_vignette(yuyv, w, h, 30);
+        size_t jn = pvc_jpeg_encode_yuv422(yuyv, w, h, 90, enc, 128 * 1024);
+        uint32_t jw = 0, jh = 0;
+        CHECK(jn > 0 && pvc_jpeg_dims(enc, jn, &jw, &jh) && jw == w && jh == h,
+              "ccd encode/dims");
+        CHECK(jn && jpg2rgb565(enc, jn, dec, JPG_SCALE_NONE), "ccd decode");
+        CHECK(heap_caps_check_integrity_all(true), "ccd heap");
+        printf("[ALGO] ccd f100 jpeg=%uB\n", (unsigned)jn);
+    }
+
     /* ================= 浸泡段: 编码器 open/close x200 泄漏检测 ================= */
     {
         size_t heap0 = esp_get_free_heap_size();

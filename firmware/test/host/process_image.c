@@ -122,13 +122,53 @@ static void rgb565_to_rgb888(const uint16_t *px, uint8_t *rgb)
     }
 }
 
+/* CCD 机型链: main/ccd_assets/ccd_<id>.l3d + 颗粒/暗角 (与 worker 同参数) */
+static const struct { const char *id; int grain, hl, vig; } k_ccd[] = {
+    { "f100", 12, 99, 30 }, { "z30", 14, 25, 16 },
+    { "a620", 13, 25, 14 }, { "m532", 12, 30, 20 },
+};
+
+static int run_ccd(const uint8_t *src_yuyv, const char *prefix)
+{
+    static uint8_t yuyv[W * H * 2], lut[25 * 25 * 25 * 3];
+    static uint16_t px[W * H];
+    static uint8_t rgb[W * H * 3];
+    hw2d_yuv_luts_t idl;
+    memset(&idl, 0, sizeof(idl));
+    hw2d_yuv_build_luts(hw2d_filter_get(HW2D_FILTER_ORIGINAL), &idl);
+    for (unsigned c = 0; c < sizeof(k_ccd) / sizeof(k_ccd[0]); c++) {
+        char path[256];
+        snprintf(path, sizeof(path), "main/ccd_assets/ccd_%s.l3d", k_ccd[c].id);
+        FILE *f = fopen(path, "rb");
+        if (!f || fread(lut, 1, sizeof(lut), f) != sizeof(lut)) {
+            fprintf(stderr, "lut %s missing\n", path);
+            if (f) fclose(f);
+            return 1;
+        }
+        fclose(f);
+        memcpy(yuyv, src_yuyv, sizeof(yuyv));
+        hw2d_yuv_blur_y(yuyv, yuyv, W, H, 40);
+        hw2d_yuv_3dlut(yuyv, W * H, lut, 25);
+        hw2d_yuv_grain(yuyv, W, H, (uint8_t)k_ccd[c].grain,
+                       (uint8_t)k_ccd[c].hl, 42);
+        hw2d_yuv_vignette(yuyv, W, H, (uint8_t)k_ccd[c].vig);
+        hw2d_yuv_filter_rgb565(px, yuyv, W * H, &idl);
+        rgb565_to_rgb888(px, rgb);
+        snprintf(path, sizeof(path), "%s_ccd_%s.bmp", prefix, k_ccd[c].id);
+        if (write_bmp24(path, rgb) != 0) return 1;
+        printf("wrote %s\n", path);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s in.bmp out_prefix [sticker]\n", argv[0]);
+        fprintf(stderr, "usage: %s in.bmp out_prefix [sticker|ccd]\n", argv[0]);
         return 2;
     }
-    int sticker = (argc > 3);
+    int sticker = (argc > 3 && strcmp(argv[3], "sticker") == 0);
+    int ccd = (argc > 3 && strcmp(argv[3], "ccd") == 0);
     static uint8_t rgb[W * H * 3], yuyv[W * H * 2], src_yuyv[W * H * 2];
     static uint16_t rgb565[W * H];
     if (read_bmp24(argv[1], rgb) != 0) {
@@ -136,6 +176,7 @@ int main(int argc, char **argv)
         return 1;
     }
     rgb_to_yuyv(rgb, src_yuyv);
+    if (ccd) return run_ccd(src_yuyv, argv[2]);
 
     static const char *const names[] = { "orig", "fair", "warm",
                                          "cool", "bw", "vintage" };
