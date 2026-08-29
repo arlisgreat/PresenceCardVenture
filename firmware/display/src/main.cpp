@@ -79,11 +79,11 @@ constexpr int kScaledVerticalCrop = 60;
 // *emits* events; consumers (carousel = SWIPE_LEFT/RIGHT, screen-off =
 // SWIPE_UP, settings = LONG_PRESS) pop them via nextGestureEvent().
 constexpr uint32_t kStarYellow = 0xF5D76E;  // cream_yellow: like star burst
-constexpr int kTapMaxMovePx = 5;          // tap: displacement below this
-constexpr uint32_t kTapMaxMs = 250;       // tap: press shorter than this
+constexpr int kTapMaxMovePx = 12;         // tap: displacement below this (GT911 抖动余量)
+constexpr uint32_t kTapMaxMs = 350;       // tap: press shorter than this
 constexpr uint32_t kMultiTapGapMs = 300;  // taps closer than this are a chain
-constexpr int kSwipeMinMovePx = 40;       // swipe: displacement above this
-constexpr uint32_t kSwipeMaxMs = 400;     // swipe: press shorter than this
+constexpr int kSwipeMinMovePx = 30;       // swipe: displacement above this
+constexpr uint32_t kSwipeMaxMs = 900;     // swipe: 慢滑也算 (400ms 丢掉了一半真实滑动)
 constexpr uint32_t kLongPressMs = 1500;   // long press: hold at least this
 constexpr uint32_t kLikeWindowMs = 2000;  // like aggregation silence window
 constexpr uint8_t kGestureQueueSize = 8;
