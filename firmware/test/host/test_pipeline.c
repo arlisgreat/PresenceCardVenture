@@ -207,6 +207,22 @@ int main(void)
         CHECK(pvc_jpeg_dims(sof, sizeof(sof), &jw, &jh) &&
               jw == 320 && jh == 240, "sof parse got %ux%u", jw, jh);
         CHECK(!pvc_jpeg_dims(sof, 9, &jw, &jh), "truncated should fail");
+
+        /* 完整性速检: SOI+EOI 齐 = 通过; 缺尾/缺头/EOI 过远 = 拒绝 */
+        static const uint8_t okj[] = { 0xFF, 0xD8, 0x11, 0x22, 0xFF, 0xD9 };
+        CHECK(pvc_jpeg_intact(okj, sizeof(okj)), "intact rejected good jpeg");
+        CHECK(!pvc_jpeg_intact(okj, sizeof(okj) - 1), "intact missed no-EOI");
+        CHECK(!pvc_jpeg_intact(okj + 2, 4), "intact missed no-SOI");
+        static uint8_t farj[200];
+        memset(farj, 0, sizeof(farj));
+        farj[0] = 0xFF; farj[1] = 0xD8; farj[2] = 0xFF; farj[3] = 0xD9;
+        CHECK(!pvc_jpeg_intact(farj, sizeof(farj)),
+              "intact accepted EOI outside tail window");
+        static uint8_t padj[100];
+        memset(padj, 0, sizeof(padj));
+        padj[0] = 0xFF; padj[1] = 0xD8; padj[60] = 0xFF; padj[61] = 0xD9;
+        CHECK(pvc_jpeg_intact(padj, sizeof(padj)),
+              "intact rejected padded tail");
     }
 
     /* ---- 180 度旋转 (装配方向补偿): 两次=恒等; 融合算子=正序输出倒置 ---- */

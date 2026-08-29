@@ -34,6 +34,9 @@ size_t pvc_jpeg_encode_yuv422(const uint8_t *yuyv, uint32_t w, uint32_t h,
 /* 快速解析 JPEG SOF 尺寸 (防异常尺寸图解码溢出); 解析失败返回 false */
 bool pvc_jpeg_dims(const uint8_t *jpg, size_t len, uint32_t *w, uint32_t *h);
 
+/* 完整性速检 (SOI + 尾部 64B 窗口内 EOI): 拒绝写了一半的缓存文件 */
+bool pvc_jpeg_intact(const uint8_t *jpg, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

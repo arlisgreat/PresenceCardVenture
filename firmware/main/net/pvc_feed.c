@@ -1,7 +1,8 @@
 #include "pvc_feed.h"
 #include "pvc_config.h"
 #include "pvc_ota.h"
-#include "pvc_sdio.h"    /* SD 与 LCD 共享 SPI2: 一切 SD I/O 须持锁 */
+#include "pvc_sdio.h"
+#include "pvc_jpeg.h"      /* pvc_jpeg_intact: 拒绝写了一半的缓存 */    /* SD 与 LCD 共享 SPI2: 一切 SD I/O 须持锁 */
 #include "pvc_http.h"
 #include "pvc_store.h"
 #include "pvc_trace.h"
@@ -54,12 +55,16 @@ static void lock_init(void)
 /* ---------------- SD 镜像 ---------------- */
 static void sd_save_slot_impl(const slot_t *s)
 {
-    char path[96];
+    char path[96], tmp[96];
     snprintf(path, sizeof(path), FEED_DIR "/%s.jpg", s->meta.photo_id);
-    FILE *f = fopen(path, "wb");
+    snprintf(tmp, sizeof(tmp), FEED_DIR "/wr.tmp");
+    FILE *f = fopen(tmp, "wb");
     if (!f) return;                       /* 无 SD: 静默跳过 (纯 PSRAM 模式) */
-    fwrite(s->jpg, 1, s->len, f);
+    size_t wr = fwrite(s->jpg, 1, s->len, f);
     fclose(f);
+    if (wr != s->len) { remove(tmp); return; }   /* 卡满/IO 错: 不留残缺 */
+    remove(path);
+    rename(tmp, path);                    /* 原子顶替: 崩溃只损失 tmp */
 
     snprintf(path, sizeof(path), FEED_DIR "/%s.txt", s->meta.photo_id);
     f = fopen(path, "w");
@@ -153,6 +158,16 @@ static void feed_restore_impl(void)
             continue;
         }
         fclose(f);
+        if (!pvc_jpeg_intact(buf, (size_t)sz)) {
+            /* 崩溃/掉电打断 fwrite 的残缺缓存: 解码出绿色块 (真机实证)。
+             * 删除后本条不入槽 -> 下轮 feed 轮询重新下载 */
+            heap_caps_free(buf);
+            remove(path);
+            snprintf(path, sizeof(path), FEED_DIR "/%s.txt", line);
+            remove(path);
+            PVC_EV("feed_cache_drop id=%s reason=truncated", line);
+            continue;
+        }
 
         slot_t *s = &s_slots[n];
         memset(s, 0, sizeof(*s));

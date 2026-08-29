@@ -126,18 +126,18 @@ esp_err_t pvc_upload_enqueue(const uint8_t *jpg, size_t len,
     mkdir(QUEUE_DIR, 0755);
     snprintf(it->path, sizeof(it->path), QUEUE_DIR "/%lu_%lu_%s.jpg",
              (unsigned long)boot, (unsigned long)seq, it->filter);
-    FILE *f = fopen(it->path, "wb");
+    FILE *f = fopen(QUEUE_DIR "/wr.tmp", "wb");
     if (f) {
         size_t wr = fwrite(jpg, 1, len, f);
         fclose(f);
-        if (wr == len) {
+        if (wr == len && rename(QUEUE_DIR "/wr.tmp", it->path) == 0) {
             pvc_sd_unlock();
             list_append(it);
             PVC_EV("upload_queued key=%s bytes=%u store=sd depth=%d",
                    it->key, (unsigned)len, pvc_upload_depth());
             return ESP_OK;
         }
-        remove(it->path);
+        remove(QUEUE_DIR "/wr.tmp");
     }
     pvc_sd_unlock();
 

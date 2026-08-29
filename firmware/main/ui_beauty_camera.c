@@ -343,9 +343,19 @@ static void update_thumbs(const uint8_t *src)
 /* 编码产物落盘 (编码本身在 worker 用 pvc_jpeg + 复用缓冲完成) */
 static bool write_file(const char *path, const uint8_t *data, size_t len)
 {
-    FILE *fp = fopen(path, "wb");
+    /* 临时文件 + 改名: 崩溃/掉电打断 fwrite 不会留下残缺正式文件
+     * (残缺 JPEG 解码出绿色块; 恢复侧另有 pvc_jpeg_intact 双保险) */
+    char tmp[96];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *fp = fopen(tmp, "wb");
     bool ok = fp && fwrite(data, 1, len, fp) == len;
     if (fp) fclose(fp);
+    if (ok) {
+        remove(path);
+        ok = (rename(tmp, path) == 0);
+    } else {
+        remove(tmp);
+    }
     if (!ok) ESP_LOGE(TAG, "write %s failed", path);
     return ok;
 }
@@ -394,7 +404,9 @@ static int load_jpg_565(const char *path, uint16_t *out, uint32_t maxw,
     }
     fclose(f);
 
-    int rc = decode_jpg_565(jbuf, (size_t)sz, out, maxw, maxh, ow, oh);
+    /* 完整性快检: 残缺文件 (掉电打断写入) 解码出绿色块, 直接判失败 */
+    int rc = pvc_jpeg_intact(jbuf, (size_t)sz)
+        ? decode_jpg_565(jbuf, (size_t)sz, out, maxw, maxh, ow, oh) : -1;
     PSRAM_FREE(jbuf);
     return rc;
 }
