@@ -61,8 +61,10 @@ constexpr uint8_t kBrightnessBoot = 180;
 constexpr uint8_t kBrightnessArrivalLow = 77;    // ~30%: fade-in start
 constexpr uint8_t kBrightnessArrivalFull = 255;  // 100%: arrival peak
 constexpr uint8_t kBrightnessResident = 179;     // ~70%: resident state after TTL
-constexpr uint8_t kBrightnessBrowseDim = 102;    // ~40%: page-turn dip while loading
-constexpr uint32_t kBrowseRampMs = 220;          // ease back up over the fresh frame
+constexpr uint8_t kBrightnessBrowseDim = 0;      // page turn: full black while loading
+constexpr uint32_t kBrowseRampMs = 150;          // then the new photo fades up
+// 用户要求: 翻页黑屏+亮起总时长 ≤0.5s。缓存命中时黑屏只剩解码耗时,
+// 150ms 渐亮把整个过渡压进预算内。
 constexpr int16_t kStickerX = 8;
 constexpr int16_t kStickerY = 8;
 constexpr int16_t kStickerHeight = 32;
@@ -77,11 +79,11 @@ constexpr int kScaledVerticalCrop = 60;
 // *emits* events; consumers (carousel = SWIPE_LEFT/RIGHT, screen-off =
 // SWIPE_UP, settings = LONG_PRESS) pop them via nextGestureEvent().
 constexpr uint32_t kStarYellow = 0xF5D76E;  // cream_yellow: like star burst
-constexpr int kTapMaxMovePx = 5;          // tap: displacement below this
-constexpr uint32_t kTapMaxMs = 250;       // tap: press shorter than this
+constexpr int kTapMaxMovePx = 12;         // tap: displacement below this (GT911 抖动余量)
+constexpr uint32_t kTapMaxMs = 350;       // tap: press shorter than this
 constexpr uint32_t kMultiTapGapMs = 300;  // taps closer than this are a chain
-constexpr int kSwipeMinMovePx = 40;       // swipe: displacement above this
-constexpr uint32_t kSwipeMaxMs = 400;     // swipe: press shorter than this
+constexpr int kSwipeMinMovePx = 30;       // swipe: displacement above this
+constexpr uint32_t kSwipeMaxMs = 900;     // swipe: 慢滑也算 (400ms 丢掉了一半真实滑动)
 constexpr uint32_t kLongPressMs = 1500;   // long press: hold at least this
 constexpr uint32_t kLikeWindowMs = 2000;  // like aggregation silence window
 constexpr uint8_t kGestureQueueSize = 8;
@@ -91,9 +93,13 @@ constexpr int16_t kStarBufPx = 40;  // save-under square per star (RGB565)
 
 // ---- Display modes (long-press selector) + info bar --------------------------
 constexpr uint32_t kSelectorTimeoutMs = 4000;  // auto-cancel when ignored
-constexpr uint32_t kSlideshowIntervalMs = 15000;
+constexpr uint32_t kSlideshowIntervalMs = 5000;   // 常开自动轮播: 5 秒一页
+constexpr uint32_t kAutoSlideTouchHoldMs = 15000;  // 任何触摸后暂停轮播 15 秒
+constexpr uint32_t kPollTouchHoldMs = 6000;   // 触摸活跃期不发起同步轮询 (防卡手)
+constexpr uint32_t kPrefetchIdleMs = 2500;    // 空闲这么久后才允许预取 feed JPEG
+constexpr uint32_t kPrefetchRetryMs = 6000;   // 预取失败的退避
 constexpr uint32_t kModeToastMs = 1500;
-constexpr int16_t kCaptionBarHeight = 56;  // "polaroid chin" info bar
+constexpr int16_t kCaptionBarHeight = 64;  // "polaroid chin" info bar
 constexpr int16_t kCaptionBarY = 480 - kCaptionBarHeight;
 
 PresenceDisplay display;
@@ -179,18 +185,24 @@ StarParticle stars[kMaxStars];
 uint8_t starWriteIndex = 0;
 
 // ---- Carousel (multi-photo feed) state ---------------------------------------
-// Only metadata is cached; JPEGs are downloaded on demand for the card being
-// shown (PSRAM cannot hold five JPEGs plus the framebuffer comfortably).
+// Metadata plus a per-slot JPEG cache in PSRAM (5 x <=160 KiB = <=800 KiB,
+// comfortably inside the 8 MiB part). Cache hits make swipes render without
+// touching the network, which is what keeps the page turn under 0.5 s.
 constexpr size_t kFeedLimit = 5;
 struct FeedPhoto {
   String photoId;
   String imageUrl;
   String author;
   String caption;
+  uint8_t* jpeg = nullptr;  // owned, right-sized PSRAM copy (nullptr = not cached)
+  size_t jpegSize = 0;
 };
 FeedPhoto feedPhotos[kFeedLimit];
 size_t feedCount = 0;
 size_t currentPhotoIndex = 0;  // 0 = newest
+uint32_t lastUserTouchAt = 0;   // any finger contact; gates polling + slideshow
+bool pollForcedByGesture = false;  // SWIPE_DOWN refresh bypasses the touch gate
+uint32_t nextPrefetchAt = 0;
 
 // ---- Display modes (long-press selector) -------------------------------------
 // Latest: new arrivals take over (default). Resident: pinned photo returns
@@ -569,6 +581,28 @@ void retainShownJpeg(uint8_t* data, size_t size) {
   shownJpegSize = size;
 }
 
+// ---- Per-slot feed JPEG cache (PSRAM) ---------------------------------------
+void freeFeedJpeg(FeedPhoto& slot) {
+  if (slot.jpeg != nullptr) {
+    heap_caps_free(slot.jpeg);
+    slot.jpeg = nullptr;
+    slot.jpegSize = 0;
+  }
+}
+
+// Store a right-sized copy so the slot survives the caller freeing its buffer.
+void cacheFeedJpeg(size_t index, const uint8_t* data, size_t size) {
+  if (index >= kFeedLimit || data == nullptr || size == 0) return;
+  FeedPhoto& slot = feedPhotos[index];
+  freeFeedJpeg(slot);
+  uint8_t* copy = static_cast<uint8_t*>(
+      heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (copy == nullptr) return;  // cache miss stays a miss; nothing breaks
+  memcpy(copy, data, size);
+  slot.jpeg = copy;
+  slot.jpegSize = size;
+}
+
 // Abandon any in-flight ritual (binding cleared, next photo takes over).
 void resetArrival(bool restoreBrightness) {
   arrivalPhase = ArrivalPhase::Idle;
@@ -769,19 +803,23 @@ void drawInfoBar(const String& author, const String& caption,
                             (b * 3 / 4);
   display.fillRect(0, kCaptionBarY, 800, 2, hairline);
   display.setFont(&fonts::efontCN_16);
-  display.setTextSize(1);
   display.setTextColor(textColor, barColor);
   const int16_t midY = kCaptionBarY + kCaptionBarHeight / 2 + 1;
   if (caption.length()) {
+    // Caption is the hero line: 32px, centered; author/index stay 16px sides.
+    display.setTextSize(2);
     String text = caption;
     bool trimmed = false;
-    while (text.length() && display.textWidth(text) > 540) {
+    while (text.length() && display.textWidth(text) > 500) {
       text.remove(text.length() - 1);
       trimmed = true;
     }
     if (trimmed) text += "…";
     display.setTextDatum(lgfx::textdatum_t::middle_center);
     display.drawString(text, 400, midY);
+    display.setTextSize(1);
+  } else {
+    display.setTextSize(1);
   }
   if (author.length()) {
     display.fillCircle(20, midY, 4, kPink);
@@ -820,13 +858,10 @@ void drawModeToast() {
   modeToastUntil = millis() + kModeToastMs;
 }
 
-// After the arrival ritual retires: Resident mode returns to its pinned photo,
-// Slideshow resumes its cadence from the newly shown card.
+// After the arrival ritual retires the always-on slideshow resumes its cadence
+// from the newly shown card. Resident mode still returns to its pinned photo.
 void onArrivalRetired() {
-  if (displayMode == DisplayMode::Slideshow) {
-    nextSlideAt = millis() + kSlideshowIntervalMs;
-    return;
-  }
+  nextSlideAt = millis() + kSlideshowIntervalMs;
   if (displayMode != DisplayMode::Resident || residentPhotoId.length() == 0) {
     return;
   }
@@ -841,30 +876,45 @@ void onArrivalRetired() {
 
 // ---- Carousel ---------------------------------------------------------------
 // Plain render for swipe navigation (no arrival ritual while browsing).
+// Cache-first: a hit decodes straight from PSRAM (fast, no network at all);
+// a miss downloads once and fills the slot cache for every later visit.
 bool renderFeedPhoto(size_t index) {
-  const FeedPhoto& photo = feedPhotos[index];
-  setStatus("DOWNLOADING", photo.photoId);
-  JpegDownload jpeg = downloadJpeg(imageUrl(photo.imageUrl));
-  if (jpeg.httpCode == 401) {
-    if (jpeg.data != nullptr) heap_caps_free(jpeg.data);
-    noteAuthFailure("image");
-    return false;
-  }
-  if (jpeg.data == nullptr) {
-    setStatus("IMAGE ERROR", "download rejected");
-    return false;
+  FeedPhoto& photo = feedPhotos[index];
+  if (photo.jpeg == nullptr) {
+    setStatus("DOWNLOADING", photo.photoId);
+    JpegDownload jpeg = downloadJpeg(imageUrl(photo.imageUrl));
+    if (jpeg.httpCode == 401) {
+      if (jpeg.data != nullptr) heap_caps_free(jpeg.data);
+      noteAuthFailure("image");
+      return false;
+    }
+    if (jpeg.data == nullptr) {
+      setStatus("IMAGE ERROR", "download rejected");
+      return false;
+    }
+    cacheFeedJpeg(index, jpeg.data, jpeg.size);
+    heap_caps_free(jpeg.data);
+    if (photo.jpeg == nullptr) {
+      setStatus("IMAGE ERROR", "cache alloc failed");
+      return false;
+    }
   }
   // Browsing away retires any in-flight arrival ritual and its sticker.
-  // Brightness is owned by carouselShow's page-turn dip, so don't restore here.
   if (arrivalPhase != ArrivalPhase::Idle) repaintStickerRegion();
-  resetArrival(false);
-  const bool rendered = decodeAndDrawJpeg(jpeg.data, jpeg.size);
+  resetArrival(true);
+  const bool rendered = decodeAndDrawJpeg(photo.jpeg, photo.jpegSize);
   if (!rendered) {
-    heap_caps_free(jpeg.data);
+    freeFeedJpeg(photo);
     setStatus("IMAGE ERROR", "JPEG rejected or decode failed");
     return false;
   }
-  retainShownJpeg(jpeg.data, jpeg.size);
+  // Overlay repaint source: own copy, since retainShownJpeg frees on replace.
+  uint8_t* shownCopy = static_cast<uint8_t*>(
+      heap_caps_malloc(photo.jpegSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (shownCopy != nullptr) {
+    memcpy(shownCopy, photo.jpeg, photo.jpegSize);
+    retainShownJpeg(shownCopy, photo.jpegSize);
+  }
   hasRenderedPhoto = true;
   drawInfoBar(photo.author, photo.caption,
               String(index + 1) + "/" + String(feedCount));
@@ -873,17 +923,18 @@ bool renderFeedPhoto(size_t index) {
 }
 
 void carouselShow(size_t index) {
-  if (index >= feedCount) return;  // 到底不动: no wrap-around in the demo
+  if (index >= feedCount) return;  // 到底不动: no wrap-around on manual swipes
   currentPhotoIndex = index;
   Serial.printf("CAROUSEL %u/%u %s\n", static_cast<unsigned>(index + 1),
                 static_cast<unsigned>(feedCount),
                 feedPhotos[index].photoId.c_str());
-  // Page-turn feel: dip the backlight while the next photo loads, then ease
-  // back up over the fresh frame. Cancels any ramp so nothing fights the dip.
-  blRampActive = false;
-  setBacklightNow(kBrightnessBrowseDim);
+  // 直接画, 不碰背光 (用户明确砍掉背光过渡)。缓存命中时整个翻页就是一次
+  // 解码 (~0.3s), 已在 0.5s 预算内。
+  const uint32_t startedAt = millis();
   renderFeedPhoto(index);
-  startBacklightRamp(kBrightnessBoot, kBrowseRampMs, false);
+  nextSlideAt = millis() + kSlideshowIntervalMs;
+  Serial.printf("PAGE_TURN %lums\n",
+                static_cast<unsigned long>(millis() - startedAt));
 }
 
 // SWIPE_LEFT = next (newer, toward index 0); SWIPE_RIGHT = previous (older).
@@ -911,15 +962,14 @@ void handleCarouselAndSleepGestures() {
       case GestureEvent::SWIPE_UP:
         break;  // 最简手势集: 上滑不再息屏 (误触黑屏太像故障)
       case GestureEvent::SWIPE_LEFT:
-        nextSlideAt = millis() + kSlideshowIntervalMs;  // manual nav delays slideshow
-        carouselNewer();
+        carouselNewer();  // carouselShow bumps nextSlideAt itself
         break;
       case GestureEvent::SWIPE_RIGHT:
-        nextSlideAt = millis() + kSlideshowIntervalMs;
         carouselOlder();
         break;
       case GestureEvent::SWIPE_DOWN:
         Serial.println("REFRESH forced feed poll");
+        pollForcedByGesture = true;  // bypasses the touch-activity poll gate
         nextCloudPollAt = 0;
         break;
       default:
@@ -1033,6 +1083,7 @@ void clearBinding() {
   modeToastActive = false;
   feedCount = 0;
   currentPhotoIndex = 0;
+  for (size_t i = 0; i < kFeedLimit; ++i) freeFeedJpeg(feedPhotos[i]);
   clearStars();
   freeShownJpeg();
   showPanelMessage("PAIRING REQUIRED", "requesting a new 6-digit code", kPink);
@@ -1331,6 +1382,7 @@ void pollTouchGestures() {
       touchDownX = touchLastX = x;
       touchDownY = touchLastY = y;
       touchDownAt = now;
+      lastUserTouchAt = now;  // gates polling + auto-slideshow
       return;
     }
     touchLastX = x;
@@ -1338,13 +1390,9 @@ void pollTouchGestures() {
     if (!longPressFired && now - touchDownAt >= kLongPressMs &&
         abs(x - touchDownX) < kTapMaxMovePx &&
         abs(y - touchDownY) < kTapMaxMovePx) {
-      longPressFired = true;
-      Serial.printf("GESTURE LONG_PRESS x=%d y=%d\n", touchDownX, touchDownY);
-      if (sleeping) {
-        queueGesture(GestureEvent::LONG_PRESS, touchDownX, touchDownY);
-      } else if (!selectorOpen) {
-        openSelector();
-      }
+      longPressFired = true;  // 最简手势集: 长按吞掉不做事 (模式盘已砍)
+      Serial.printf("GESTURE LONG_PRESS x=%d y=%d (ignored)\n", touchDownX,
+                    touchDownY);
     }
     return;
   }
@@ -1691,8 +1739,20 @@ void processFeed(const HttpResponse& response) {
     return;
   }
 
-  // Cache metadata for up to kFeedLimit newest photos. JPEG bytes are fetched
-  // on demand only for the card being displayed.
+  // Cache metadata for up to kFeedLimit newest photos. JPEG caches migrate by
+  // photoId so a feed shift (new arrival pushes everything down one slot)
+  // doesn't throw away bytes we already downloaded.
+  uint8_t* oldJpeg[kFeedLimit];
+  size_t oldJpegSize[kFeedLimit];
+  String oldId[kFeedLimit];
+  const size_t oldCount = feedCount;
+  for (size_t i = 0; i < oldCount; ++i) {
+    oldId[i] = feedPhotos[i].photoId;
+    oldJpeg[i] = feedPhotos[i].jpeg;
+    oldJpegSize[i] = feedPhotos[i].jpegSize;
+    feedPhotos[i].jpeg = nullptr;
+    feedPhotos[i].jpegSize = 0;
+  }
   size_t count = 0;
   for (JsonObject entry : items) {
     if (count >= kFeedLimit) break;
@@ -1704,6 +1764,17 @@ void processFeed(const HttpResponse& response) {
     slot.imageUrl = entryUrl;
     slot.author = entry["author"]["display_name"] | "";
     slot.caption = entry["caption"] | "";
+    for (size_t i = 0; i < oldCount; ++i) {
+      if (oldJpeg[i] != nullptr && oldId[i] == slot.photoId) {
+        slot.jpeg = oldJpeg[i];
+        slot.jpegSize = oldJpegSize[i];
+        oldJpeg[i] = nullptr;
+        break;
+      }
+    }
+  }
+  for (size_t i = 0; i < oldCount; ++i) {
+    if (oldJpeg[i] != nullptr) heap_caps_free(oldJpeg[i]);
   }
   if (count == 0) {
     setStatus("FEED INVALID", "missing photo_id/image_url");
@@ -1731,6 +1802,8 @@ void processFeed(const HttpResponse& response) {
     setStatus("IMAGE ERROR", "download rejected");
     return;
   }
+  // Slot 0 cache: later swipes back to the newest photo skip the network.
+  cacheFeedJpeg(0, jpeg.data, jpeg.size);
 
   if (sleeping) {
     // Silent ingest while the panel is off: draw the pixels (backlight stays
@@ -1897,11 +1970,12 @@ void loop() {
     modeToastActive = false;
     repaintRegionFromShown(280, 4, 244, 60);
   }
-  if (displayMode == DisplayMode::Slideshow && !selectorOpen && !sleeping &&
-      arrivalPhase == ArrivalPhase::Idle && feedCount > 1 &&
-      timeReached(now, nextSlideAt)) {
-    nextSlideAt = now + kSlideshowIntervalMs;
-    carouselShow((currentPhotoIndex + 1) % feedCount);
+  // Always-on slideshow: 5 s cadence whenever nobody is touching the panel
+  // (15 s hold after the last touch) and no ritual is in flight.
+  if (!selectorOpen && !sleeping && arrivalPhase == ArrivalPhase::Idle &&
+      feedCount > 1 && hasRenderedPhoto && timeReached(now, nextSlideAt) &&
+      timeReached(now, lastUserTouchAt + kAutoSlideTouchHoldMs)) {
+    carouselShow((currentPhotoIndex + 1) % feedCount);  // auto mode wraps
   }
   if (token.length() == 0) {
     if (!timeReached(now, nextPairActionAt)) {
@@ -1915,9 +1989,36 @@ void loop() {
       pollPairStatus();
       nextPairActionAt = now + kPairPollMs;
     }
-  } else if (timeReached(now, nextCloudPollAt)) {
+  } else if (timeReached(now, nextCloudPollAt) &&
+             (pollForcedByGesture ||
+              timeReached(now, lastUserTouchAt + kPollTouchHoldMs))) {
+    // Touch gate: a synchronous poll blocks this loop for seconds on a slow
+    // hotspot, which reads as "the frame is frozen". While fingers are active
+    // we hold the poll; SWIPE_DOWN's forced refresh goes through regardless.
+    pollForcedByGesture = false;
     nextCloudPollAt = now + kCloudPollMs;
     pollCloud();
+  } else if (token.length() > 0 && feedCount > 0 && !sleeping &&
+             arrivalPhase == ArrivalPhase::Idle &&
+             timeReached(now, nextPrefetchAt) &&
+             timeReached(now, lastUserTouchAt + kPrefetchIdleMs)) {
+    // Idle prefetch: pull one uncached feed JPEG per pass so later swipes are
+    // pure decode (no network on the page-turn path).
+    for (size_t i = 0; i < feedCount; ++i) {
+      if (feedPhotos[i].jpeg != nullptr) continue;
+      JpegDownload jpeg = downloadJpeg(imageUrl(feedPhotos[i].imageUrl));
+      if (jpeg.data != nullptr) {
+        cacheFeedJpeg(i, jpeg.data, jpeg.size);
+        heap_caps_free(jpeg.data);
+        Serial.printf("PREFETCH %u/%u %s cached\n", static_cast<unsigned>(i + 1),
+                      static_cast<unsigned>(feedCount),
+                      feedPhotos[i].photoId.c_str());
+        nextPrefetchAt = millis() + 250;
+      } else {
+        nextPrefetchAt = millis() + kPrefetchRetryMs;
+      }
+      break;
+    }
   }
 
   // Touch gestures + like stars + aggregated like reporting. Non-blocking;
