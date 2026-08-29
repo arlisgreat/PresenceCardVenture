@@ -289,11 +289,25 @@ function FeedView({ feed, circles, circle, hasMore, loadingMore, onLoadMore, onC
   }, [observerSupported, hasMore])
   return <section className="content-wrap feed-view">
     <div className="feed-intro"><div><p className="section-kicker">CIRCLE / 朋友的小圈</p><p className="intro-copy">没有推送，只有刚好想起你的人。</p></div><button className="primary-button" onClick={onCreate}><span>＋</span>释放一张</button></div>
-    <div className="circle-tabs">{tabs.map(item => <button key={item.id} className={item.id === circle ? 'circle-tab selected' : 'circle-tab'} onClick={() => onCircle(item.id)}>{item.name}<span>{String(item.id === 'all' ? feed.length : circles.find(entry => entry.id === item.id)?.photo_count ?? 0).padStart(2, '0')}</span></button>)}<button className="circle-tab circle-tab-more" onClick={onBrowseCircles}>发现大圈<span>◎</span></button></div>
-    {feed.length === 0 ? <div className="empty-state"><span>◌</span><h2>圈子还在等第一张照片</h2><p>释放今天的一个瞬间，朋友会在这里遇见它。</p></div> : <div className="post-stream">{feed.map((item, index) => <div className="post-cell" key={item.id} style={{ animationDelay: `${Math.min(index, 6) * 70}ms` }}><PostCard item={item} burst={heartBurst === item.id} onReact={() => onReact(item)} onPoke={() => onPoke(item)} onHeartBurst={() => onHeartBurst(item)} onDelete={() => onDelete(item)} /></div>)}</div>}
-    {hasMore
-      ? <div className="feed-sentinel" ref={sentinelRef}>{loadingMore ? <span className="feed-loading"><span aria-hidden="true">✦</span>正在翻出更早的照片…</span> : <button className="load-more-button" onClick={onLoadMore}>载入更早的照片</button>}</div>
-      : feed.length > 0 && <div className="feed-footer"><span>—</span> 今天的在场，到这里刚刚好 <span>—</span></div>}
+    <div className="feed-layout">
+      <div className="feed-main">
+        <div className="circle-tabs">{tabs.map(item => <button key={item.id} className={item.id === circle ? 'circle-tab selected' : 'circle-tab'} onClick={() => onCircle(item.id)}>{item.name}<span>{String(item.id === 'all' ? feed.length : circles.find(entry => entry.id === item.id)?.photo_count ?? 0).padStart(2, '0')}</span></button>)}<button className="circle-tab circle-tab-more" onClick={onBrowseCircles}>发现大圈<span>◎</span></button></div>
+        {feed.length === 0 ? <div className="empty-state"><span>◌</span><h2>圈子还在等第一张照片</h2><p>释放今天的一个瞬间，朋友会在这里遇见它。</p></div> : <div className="post-stream">{feed.map((item, index) => <div className="post-cell" key={item.id} style={{ animationDelay: `${Math.min(index, 6) * 70}ms` }}><PostCard item={item} burst={heartBurst === item.id} onReact={() => onReact(item)} onPoke={() => onPoke(item)} onHeartBurst={() => onHeartBurst(item)} onDelete={() => onDelete(item)} /></div>)}</div>}
+        {hasMore
+          ? <div className="feed-sentinel" ref={sentinelRef}>{loadingMore ? <span className="feed-loading"><span aria-hidden="true">✦</span>正在翻出更早的照片…</span> : <button className="load-more-button" onClick={onLoadMore}>载入更早的照片</button>}</div>
+          : feed.length > 0 && <div className="feed-footer"><span>—</span> 今天的在场，到这里刚刚好 <span>—</span></div>}
+      </div>
+      <aside className="feed-rail">
+        <div className="rail-card">
+          <p className="panel-label">我的圈子</p>
+          <div className="rail-circles">{tabs.map(item => <button key={item.id} className={item.id === circle ? 'rail-circle selected' : 'rail-circle'} onClick={() => onCircle(item.id)}>{item.name}<span>{String(item.id === 'all' ? feed.length : circles.find(entry => entry.id === item.id)?.photo_count ?? 0).padStart(2, '0')}</span></button>)}</div>
+          <button className="rail-discover" onClick={onBrowseCircles}>发现大圈 <span aria-hidden="true">◎</span></button>
+        </div>
+        <div className="rail-card rail-note">
+          <p>没有算法，只有订阅。<br />照片按时间倒序，<br />翻到底就是今天的全部。</p>
+        </div>
+      </aside>
+    </div>
   </section>
 }
 

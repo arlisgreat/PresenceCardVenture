@@ -160,8 +160,27 @@ body::before {
 .feed-footer { display: flex; justify-content: center; align-items: center; gap: 15px; margin: 75px 0 5px; color: var(--muted); font: 12px var(--font-pixel); letter-spacing: .1em; }
 .feed-footer span { color: var(--candy-pink); }
 
-/* ── INS 帖子流：单列上下滑，贴纸皮不变 ── */
-.feed-view { max-width: 680px; }
+/* ── INS 帖子流：移动端纯单列，桌面端主列 + 右侧圈子栏 ── */
+.feed-view { max-width: 1060px; }
+.feed-layout { align-items: start; }
+.feed-main { min-width: 0; }
+.feed-rail { display: none; }
+@media (min-width: 961px) {
+  .feed-layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 56px; margin-top: 44px; }
+  .feed-main > .circle-tabs { display: none; }
+  .feed-rail { display: flex; flex-direction: column; gap: 24px; position: sticky; top: 36px; }
+}
+.rail-card { background: var(--paper-white); border: 2px solid var(--ink); box-shadow: var(--shadow-hard); padding: 18px; }
+.rail-circles { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.rail-circle { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink-soft); padding: 9px 11px; font-size: 13px; text-align: left; transition: background .2s, transform .15s var(--ease-spring); }
+.rail-circle:hover { background: var(--yellow-soft); transform: translateX(2px); }
+.rail-circle.selected { background: var(--cream-yellow); border-color: var(--ink); color: var(--ink); font-weight: 700; box-shadow: var(--shadow-hard-sm); }
+.rail-circle span { font-family: var(--font-pixel); font-size: 11px; color: var(--muted); }
+.rail-circle.selected span { color: var(--ink); }
+.rail-discover { margin-top: 14px; width: 100%; border: 2px dashed var(--ink); border-radius: 6px; background: transparent; color: var(--muted); padding: 10px; font-size: 12px; transition: background .2s, color .2s; }
+.rail-discover:hover { background: var(--yellow-soft); color: var(--ink); }
+.rail-discover span { color: var(--sky-blue); }
+.rail-note p { margin: 0; font-size: 12px; line-height: 2.1; color: var(--muted); }
 .post-stream { display: flex; flex-direction: column; gap: 46px; }
 .post-cell { animation: flash-in var(--dur-flash) var(--ease-flash-in) both; }
 .post-card { background: var(--paper-white); border: 2px solid var(--ink); padding: 14px 14px 16px; box-shadow: var(--shadow-hard); transition: transform .25s var(--ease-spring), box-shadow .25s; }
