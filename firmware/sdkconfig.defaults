@@ -14,9 +14,6 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # 全挪外部; WiFi/BLE 驱动走显式 heap_caps 内部分配不受影响)
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 
-# 触摸: 长按 1500ms 呼出模式选择盘 (交付文档 v1.1 §2/§3)
-CONFIG_LV_INDEV_DEF_LONG_PRESS_TIME=1500
-
 # S3 I/D-Cache 扩容至 32KB: 像素算子 / 滤波 LUT / 缩放行缓冲命中率提升,
 # 对逐像素渲染收益明显 (代价: 片内 SRAM 各减 16KB, CoreS3 仍有 512KB 足够)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y

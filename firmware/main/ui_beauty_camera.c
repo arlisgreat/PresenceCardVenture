@@ -56,6 +56,7 @@
 #include "ccd_assets/ccd_luts.h"
 #include "pvc_sound.h"
 #include "pvc_face.h"
+#include "pvc_voice.h"
 #include "pvc_trace.h"
 #include "esp_camera.h"
 #include "img_converters.h"     /* fmt2jpg / jpg2rgb565 (esp32-camera) */
@@ -105,6 +106,12 @@ static void do_like(void);
 static void spawn_like_float(int count);
 static void open_publish_panel(void);
 static lv_obj_t *panel_create(uint32_t h);
+static void take_photo(void);
+static void on_layer_pressed(lv_event_t *e);
+static void on_layer_pressing(lv_event_t *e);
+static void on_layer_released(lv_event_t *e);
+static void layer_gesture_register(lv_obj_t *obj);
+static void on_layer_long_press(lv_event_t *e);
 static void icon_close(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
 static void icon_send(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
 static void icon_filter(lv_obj_t *parent, int32_t x, int32_t y, lv_color_t c);
@@ -295,6 +302,12 @@ static void preview_timer_cb(lv_timer_t *t)
     const app_camera_frame_t *f;
     if (!s_canvas || s_publish_pending) return;
     if (s_mode != MODE_CAMERA) return;   /* 相机为下滑进入的子状态, 其余模式不渲染预览 */
+    /* 声控拍照: 大声喊触发 (仅拍照模式; 触发即取走) */
+    if (pvc_voice_take_trigger()) {
+        PVC_EV("shutter via=voice");
+        take_photo();
+        return;
+    }
     f = app_camera_grab();
     if (!f) return;
 
@@ -726,6 +739,8 @@ static void take_photo(void)
         toast_show("处理中, 稍候再拍");
         return;
     }
+    /* 快门声和现场回声不能残留成下一次声控触发。 */
+    pvc_voice_set_enabled(false);
     s_seq++;
     s_publish_pending = true;
     s_publish_queued = false;
@@ -859,6 +874,8 @@ static void open_publish_panel(void)
         publish_choice_t choice = { .send = true };
         if (s_publish_choice_q) xQueueSend(s_publish_choice_q, &choice, 0);
         s_publish_pending = false;
+        /* 极低内存降级为直接发送时，仍留在相机页，重新开启声控。 */
+        pvc_voice_set_enabled(s_mode == MODE_CAMERA);
         return;
     }
     if (s_publish_choice_q) xQueueReset(s_publish_choice_q);
@@ -873,6 +890,10 @@ static void open_publish_panel(void)
     lv_obj_set_style_radius(p, 0, 0);
     lv_obj_set_style_pad_all(p, 0, 0);
     lv_obj_set_style_shadow_width(p, 0, 0);
+    /* 定格预览手势: 上滑=重拍 (规范 §5); 关滚动保手势 */
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(p, on_layer_long_press, LV_EVENT_LONG_PRESSED, NULL);
+    layer_gesture_register(p);
 
     lv_obj_t *raw = lv_canvas_create(p);
     lv_canvas_set_buffer(raw, s_review_raw_buf, UI_W, UI_H, LV_COLOR_FORMAT_RGB565);
@@ -951,11 +972,16 @@ static void open_publish_panel(void)
     lv_obj_set_style_border_width(s_publish_controls, 0, 0);
     lv_obj_set_style_radius(s_publish_controls, 0, 0);
     lv_obj_set_style_pad_all(s_publish_controls, 0, 0);
+    lv_obj_remove_flag(s_publish_controls, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(s_publish_controls, on_layer_long_press,
+                        LV_EVENT_LONG_PRESSED, NULL);
+    layer_gesture_register(s_publish_controls);
 
     lv_obj_t *cancel = lv_btn_create(s_publish_controls);
     lv_obj_set_size(cancel, 136, 72);
     lv_obj_set_pos(cancel, 0, 0);
     style_large_touch_target(cancel);
+    lv_obj_add_flag(cancel, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(cancel, on_publish_click, LV_EVENT_CLICKED, (void *)0);
     /* 重拍药丸 (规范画面 2): 90x36 纸白 R18, 深色 × */
     lv_obj_t *cancel_pill = lv_obj_create(cancel);
@@ -973,6 +999,7 @@ static void open_publish_panel(void)
     lv_obj_set_size(send, 136, 72);
     lv_obj_set_pos(send, UI_W - 136, 0);
     style_large_touch_target(send);
+    lv_obj_add_flag(send, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(send, on_publish_click, LV_EVENT_CLICKED, (void *)1);
     /* 发布药丸 (规范画面 2): 天空蓝 R18, 白色上升箭头 */
     lv_obj_t *send_pill = lv_obj_create(send);
@@ -1455,6 +1482,7 @@ static void set_mode(ui_mode_t m)
     if (m != MODE_CAMERA) s_mode_before_cam = m;
     s_mode = m;
     bool cam = (m == MODE_CAMERA);
+    pvc_voice_set_enabled(cam && !s_publish_pending);
     if (s_canvas)   lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
     if (!cam && s_canvas) { /* 非相机时预览停渲染 (preview_timer_cb 守卫) */ }
     if (cam && s_canvas)    lv_obj_clear_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
@@ -1543,6 +1571,7 @@ static void sleep_wake(void)
 /* ---- 全局手势路由 (规范 §2: 各模式根层注册, 回调统一进这里) ---- */
 static void gesture_dispatch(lv_dir_t dir)
 {
+    PVC_EV("gesture dir=%d mode=%d", (int)dir, (int)s_mode);
     if (s_sleeping) { sleep_wake(); return; }
     if (s_picker) return;                       /* 选择盘打开期间不导航 */
     if (s_sheet && !lv_obj_has_flag(s_sheet, LV_OBJ_FLAG_HIDDEN)) {
@@ -1579,11 +1608,6 @@ static void gesture_dispatch(lv_dir_t dir)
     }
 }
 
-static void on_layer_gesture(lv_event_t *e)
-{
-    gesture_dispatch(lv_indev_get_gesture_dir(lv_indev_active()));
-}
-
 /* 常驻屏单击: 息屏唤醒; 否则按压处散星 (纯视觉, 本地足迹无 photo_id 不发 like) */
 static void on_home_click(lv_event_t *e)
 {
@@ -1595,6 +1619,53 @@ static void on_home_click(lv_event_t *e)
         lv_indev_get_point(indev, &p);
         spawn_star_at(p.x, p.y);
     }
+}
+
+/* ---- 触摸手动诊断 (LVGL 9: 内置 GESTURE 只识别 scroll; 手动累计位移) ----
+ * 按帧累计: PRESSING 回调里读 lv_indev_get_vect 拿这一帧的增量, 累计到 RELEASED
+ * 判定。注意: LVGL 内部 gesture_sum 仅当按下位置不变才累计, 所以此处自行累计。 */
+#define GEST_MIN 30          /* 位移阈值 px (规范 40, 触摸屏偏小降为 30) */
+#define GEST_MAX_OTHER 60    /* 另一轴上限 px (规范 30 -> 60 容错) */
+static int  s_touch_dx = 0, s_touch_dy = 0;
+static void touch_diag_reset(void) { s_touch_dx = 0; s_touch_dy = 0; }
+
+static void touch_diag_read(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t v;
+    lv_indev_get_vect(indev, &v);      /* 本帧增量 */
+    s_touch_dx += v.x;
+    s_touch_dy += v.y;
+}
+static void touch_diag_release(lv_event_t *e)
+{
+    (void)e;
+    int dx = s_touch_dx, dy = s_touch_dy;
+    touch_diag_reset();
+    if (dx == 0 && dy == 0) return;
+    /* 阈值判定: 主轴 >= GEST_MIN, 副轴 <= GEST_MAX_OTHER */
+    lv_dir_t dir = LV_DIR_NONE;
+    if (abs(dx) > abs(dy)) {
+        if (abs(dy) <= GEST_MAX_OTHER && abs(dx) >= GEST_MIN)
+            dir = dx > 0 ? LV_DIR_RIGHT : LV_DIR_LEFT;
+    } else {
+        if (abs(dx) <= GEST_MAX_OTHER && abs(dy) >= GEST_MIN)
+            dir = dy > 0 ? LV_DIR_BOTTOM : LV_DIR_TOP;
+    }
+    if (dir != LV_DIR_NONE) gesture_dispatch(dir);
+}
+static void on_layer_pressed(lv_event_t *e) { (void)e; touch_diag_reset(); }
+static void on_layer_pressing(lv_event_t *e) { (void)e; touch_diag_read(e); }
+static void on_layer_released(lv_event_t *e) { touch_diag_release(e); }
+
+/* 所有手势层的回调一次性注册 */
+static void layer_gesture_register(lv_obj_t *obj)
+{
+    lv_obj_add_event_cb(obj, on_layer_pressed, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(obj, on_layer_pressing, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(obj, on_layer_released, LV_EVENT_RELEASED, NULL);
 }
 
 /* ---- 三模式选择盘 (规范 §3: 长按 1.5s 呼出) ---- */
@@ -1700,7 +1771,9 @@ static void sheet_build(lv_obj_t *scr)
     lv_obj_set_style_radius(s_sheet, 0, 0);
     lv_obj_set_style_pad_all(s_sheet, 0, 0);
     lv_obj_add_flag(s_sheet, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(s_sheet, on_layer_gesture, LV_EVENT_GESTURE, NULL);
+    lv_obj_remove_flag(s_sheet, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(s_sheet, on_layer_long_press, LV_EVENT_LONG_PRESSED, NULL);
+    layer_gesture_register(s_sheet);
 
     /* 状态栏: WiFi + 固件版本 */
     lv_obj_t *top = lv_label_create(s_sheet);
@@ -1719,6 +1792,7 @@ static void sheet_build(lv_obj_t *scr)
         lv_obj_set_style_border_width(sk, 2, 0);
         lv_obj_set_style_border_color(sk, COL_PAPER, 0);
         lv_obj_set_style_shadow_width(sk, 0, 0);
+        lv_obj_add_flag(sk, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_add_event_cb(sk, sheet_skin_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *l = lv_label_create(sk);
         lv_label_set_text(l, skins[i]);
@@ -1733,6 +1807,7 @@ static void sheet_build(lv_obj_t *scr)
     lv_obj_set_style_bg_color(slp, COL_SKY, 0);
     lv_obj_set_style_radius(slp, 16, 0);
     lv_obj_set_style_shadow_width(slp, 0, 0);
+    lv_obj_add_flag(slp, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(slp, sheet_sleep_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *sl = lv_label_create(slp);
     lv_label_set_text(sl, "息屏");
@@ -1746,6 +1821,7 @@ static void sheet_build(lv_obj_t *scr)
     lv_obj_set_style_bg_color(cls, lv_color_make(0x2a, 0x2e, 0x2a), 0);
     lv_obj_set_style_radius(cls, 16, 0);
     lv_obj_set_style_shadow_width(cls, 0, 0);
+    lv_obj_add_flag(cls, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(cls, sheet_close_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cl = lv_label_create(cls);
     lv_label_set_text(cl, "收起");
@@ -2237,8 +2313,11 @@ void ui_beauty_camera_create(void)
     lv_canvas_set_buffer(s_canvas, s_canvas_buf, UI_W, UI_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_set_pos(s_canvas, 0, 0);
     lv_obj_set_style_bg_opa(s_canvas, LV_OPA_TRANSP, 0);
-    /* 相机模式手势: 左右轻划切滤镜 / 上滑退出 (规范 §5) */
-    lv_obj_add_event_cb(s_canvas, on_layer_gesture, LV_EVENT_GESTURE, NULL);
+    /* 相机模式手势: 左右轻划切滤镜 / 上滑退出 (规范 §5)。
+     * 关自身滚动, 手势由手动 touch_diag 累计位移后派发。 */
+    lv_obj_remove_flag(s_canvas, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_CLICKABLE);
+    layer_gesture_register(s_canvas);
 
     /* 顶部只保留关系入口与联网圆点，不占一整条状态栏。 */
     lv_obj_t *feed_hot = lv_btn_create(scr);
@@ -2246,6 +2325,7 @@ void ui_beauty_camera_create(void)
     lv_obj_set_size(feed_hot, 72, 58);
     lv_obj_set_pos(feed_hot, 0, 0);
     style_tool_btn(feed_hot);
+    lv_obj_add_flag(feed_hot, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(feed_hot, btn_feed_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(feed_hot, btn_flip_long_cb, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_t *orbit = lv_arc_create(feed_hot);
@@ -2308,12 +2388,16 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_set_style_shadow_width(bar, 0, 0);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(bar, on_layer_long_press, LV_EVENT_LONG_PRESSED, NULL);
+    layer_gesture_register(bar);
 
     /* 滤镜：点击滤镜，长按美颜；整块 104x60 都可点。 */
     lv_obj_t *b_filter = lv_btn_create(bar);
     lv_obj_set_size(b_filter, 104, BAR_H);
     lv_obj_set_pos(b_filter, 0, 0);
     style_tool_btn(b_filter);
+    lv_obj_add_flag(b_filter, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(b_filter, btn_filter_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(b_filter, btn_beauty_cb, LV_EVENT_LONG_PRESSED, NULL);
     icon_filter(b_filter, (104 - 28) / 2, (BAR_H - 23) / 2,
@@ -2324,6 +2408,7 @@ void ui_beauty_camera_create(void)
     lv_obj_set_size(b_shutter, 112, BAR_H);
     lv_obj_set_pos(b_shutter, 104, 0);
     style_tool_btn(b_shutter);
+    lv_obj_add_flag(b_shutter, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(b_shutter, btn_shutter_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(b_shutter, btn_album_cb, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_t *shutter_ring = lv_obj_create(b_shutter);
@@ -2341,6 +2426,7 @@ void ui_beauty_camera_create(void)
     lv_obj_set_size(b_mirror, 104, BAR_H);
     lv_obj_set_pos(b_mirror, 216, 0);
     style_tool_btn(b_mirror);
+    lv_obj_add_flag(b_mirror, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(b_mirror, btn_mirror_cb, LV_EVENT_CLICKED, NULL);
     s_mirror_label = lv_obj_create(b_mirror);   /* 复用为开关指示点 */
     lv_obj_set_size(s_mirror_label, 7, 7);
@@ -2427,10 +2513,12 @@ void ui_beauty_camera_create(void)
     lv_obj_set_style_radius(s_feed_panel, 0, 0);
     lv_obj_set_style_shadow_width(s_feed_panel, 0, 0);
     lv_obj_add_flag(s_feed_panel, LV_OBJ_FLAG_HIDDEN);
-    /* 小圈/大圈流手势: 左右翻页 / 下滑拍照 / 上滑系统页; 长按=选择盘 */
-    lv_obj_add_event_cb(s_feed_panel, on_layer_gesture, LV_EVENT_GESTURE, NULL);
+    /* 小圈/大圈流手势: 左右翻页 / 下滑拍照 / 上滑系统页; 长按=选择盘。
+     * 必须关滚动, 否则手势被滚动逻辑吃掉 */
+    lv_obj_remove_flag(s_feed_panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(s_feed_panel, on_layer_long_press,
                         LV_EVENT_LONG_PRESSED, NULL);
+    layer_gesture_register(s_feed_panel);
 
     if (s_feed_buf) {
         s_feed_canvas = lv_canvas_create(s_feed_panel);
@@ -2439,6 +2527,7 @@ void ui_beauty_camera_create(void)
         lv_obj_set_pos(s_feed_canvas, 0, 0);
         lv_obj_set_style_bg_opa(s_feed_canvas, LV_OPA_TRANSP, 0);
         lv_obj_add_flag(s_feed_canvas, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_feed_canvas, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_add_event_cb(s_feed_canvas, on_feed_canvas_click,
                             LV_EVENT_CLICKED, NULL);
     }
@@ -2483,6 +2572,7 @@ void ui_beauty_camera_create(void)
 
     /* 返回 / 上一张 / 下一张 / 点赞 */
     lv_obj_t *f_back = lv_btn_create(s_feed_panel);
+    lv_obj_add_flag(f_back, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_set_size(f_back, 52, 28);
     lv_obj_set_pos(f_back, 8, 6);
     lv_obj_add_event_cb(f_back, on_feed_back, LV_EVENT_CLICKED, NULL);
@@ -2491,6 +2581,7 @@ void ui_beauty_camera_create(void)
     lv_obj_center(f_back_l);
 
     lv_obj_t *f_prev = lv_btn_create(s_feed_panel);
+    lv_obj_add_flag(f_prev, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_set_size(f_prev, 36, 48);
     lv_obj_set_pos(f_prev, 4, (UI_H - 48) / 2);
     lv_obj_set_style_bg_opa(f_prev, LV_OPA_40, 0);
@@ -2500,6 +2591,7 @@ void ui_beauty_camera_create(void)
     lv_obj_center(f_prev_l);
 
     lv_obj_t *f_next = lv_btn_create(s_feed_panel);
+    lv_obj_add_flag(f_next, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_set_size(f_next, 36, 48);
     lv_obj_set_pos(f_next, UI_W - 40, (UI_H - 48) / 2);
     lv_obj_set_style_bg_opa(f_next, LV_OPA_40, 0);
@@ -2509,6 +2601,7 @@ void ui_beauty_camera_create(void)
     lv_obj_center(f_next_l);
 
     lv_obj_t *f_heart = lv_btn_create(s_feed_panel);
+    lv_obj_add_flag(f_heart, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_set_size(f_heart, 64, 30);          /* "点赞" 2x16px + 内边距 */
     lv_obj_set_pos(f_heart, UI_W - 72, 6);
     lv_obj_set_style_bg_color(f_heart, lv_color_make(0xe8, 0x4a, 0x4a), 0);
@@ -2520,6 +2613,7 @@ void ui_beauty_camera_create(void)
 
     /* 全部/小圈 切换 (小圈互动入口: 只看小圈内容, 双击或按钮点赞) */
     s_feed_circle_btn = lv_btn_create(s_feed_panel);
+    lv_obj_add_flag(s_feed_circle_btn, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_set_size(s_feed_circle_btn, 64, 30);
     lv_obj_set_pos(s_feed_circle_btn, UI_W - 144, 6);
     lv_obj_set_style_bg_color(s_feed_circle_btn, lv_color_make(0x28, 0x30, 0x40), 0);
@@ -2538,12 +2632,14 @@ void ui_beauty_camera_create(void)
                              LV_COLOR_FORMAT_RGB565);
         lv_obj_set_pos(s_home_canvas, 0, 0);
         lv_obj_set_style_bg_opa(s_home_canvas, LV_OPA_TRANSP, 0);
+        lv_obj_remove_flag(s_home_canvas, LV_OBJ_FLAG_SCROLLABLE);
         hw2d_fill(s_home_buf, UI_W * UI_H, rgb565(0x1a, 0x1d, 0x1a));
-        /* HOME 手势: 左右翻足迹 / 下滑拍照 / 上滑系统页 / 长按选择盘 */
-        lv_obj_add_event_cb(s_home_canvas, on_layer_gesture,
-                            LV_EVENT_GESTURE, NULL);
+        /* HOME 手势: 左右翻足迹 / 下滑拍照 / 上滑系统页 / 长按选择盘
+         * 必须关滚动, 否则手势被滚动逻辑吃掉 */
+        lv_obj_remove_flag(s_home_canvas, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(s_home_canvas, on_layer_long_press,
                             LV_EVENT_LONG_PRESSED, NULL);
+        layer_gesture_register(s_home_canvas);
         lv_obj_add_flag(s_home_canvas, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(s_home_canvas, on_home_click,
                             LV_EVENT_CLICKED, NULL);
