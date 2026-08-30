@@ -62,6 +62,9 @@ CONFIG_HEAP_POISONING_COMPREHENSIVE=y
 # --- 日志 ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
+# --- SNTP: pvc_net.c 配 2 个服务器 (阿里云优先, pool 兜底), IDF 默认上限 1 ---
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
 # --- OTA (docs/02 §3.1 fw_latest) ---
 # 回滚保护: 新固件首次启动为 PENDING_VERIFY, 自检 (首次 feed 同步成功) 后
 # pvc_ota_mark_valid() 落账; 未落账即重启/崩溃则 bootloader 自动回滚旧槽

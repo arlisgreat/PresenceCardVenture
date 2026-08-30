@@ -2,13 +2,21 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { DemoStore, errorBody } from '../demo-store.js'
 const auth = (r: FastifyRequest, s: DemoStore) => s.userForToken(String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, ''))
+// Reactions are a device API too (docs/02 §3.4): resolve device tokens to the paired user.
+const reactionActor = (r: FastifyRequest, s: DemoStore) => {
+  const token = String(r.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+  const user = s.userForToken(token)
+  if (user) return user
+  const device = s.deviceForToken(token)
+  return device?.userId ? s.user(device.userId) : undefined
+}
 export async function socialRoutes(app: FastifyInstance, store: DemoStore) {
   // Private AI drafts cannot escape via messages or reaction activity before publish.
   app.addHook('preHandler', async (request, reply) => {
     const body = request.body as { photo_id?: string } | undefined
     const params = request.params as { id?: string } | undefined
     const routePath = request.routeOptions.url ?? ''
-    const id = routePath.includes('/reactions') ? params?.id : routePath === '/v1/messages' ? body?.photo_id : undefined
+    const id = routePath.includes('/photos/') && routePath.includes('/reactions') ? params?.id : (routePath === '/v1/messages' || routePath === '/v1/reactions') ? body?.photo_id : undefined
     if (id && store.photos.get(id)?.draftJobId) return reply.code(403).send(errorBody('FORBIDDEN', 'AI draft is private'))
   })
   app.get('/friends', async (r, reply) => { const u=auth(r,store); if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid')); return [...store.users.values()].filter(x=>x.id!==u.id&&store.isFriend(u.id,x.id)).map(x=>({username:x.username,display_name:x.displayName,since:new Date().toISOString()})) })
@@ -20,8 +28,11 @@ export async function socialRoutes(app: FastifyInstance, store: DemoStore) {
   app.get('/conversations/:id/messages', async (r:any,reply)=>{const u=auth(r,store);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const peers=[...store.users.values()].filter(x=>x.id!==u.id&&store.isFriend(u.id,x.id));const peer=peers.find(x=>`conv_${[u.id,x.id].sort().join('_')}`===r.params.id);if(!peer)return reply.code(404).send(errorBody('NOT_FOUND','conversation not found'));return store.messages.filter(m=>(m.from===u.id&&m.to===peer.id)||(m.from===peer.id&&m.to===u.id)).map(m=>messageBody(m,store,u.id))})
   app.get('/messages', async (r:any,reply)=>{const u=auth(r,store);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const friend=r.query?.friend;const peer=friend?[...store.users.values()].find(x=>x.username===friend):undefined;return store.messages.filter(m=>(m.from===u.id||m.to===u.id)&&(!peer||(m.from===peer.id||m.to===peer.id))).map(m=>messageBody(m,store,u.id))})
   app.post('/messages', async (r,reply)=>{const u=auth(r,store), b:any=r.body;if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const target=b?.to??b?.friend;const peer=[...store.users.values()].find(x=>x.username===target||x.id===target);if(!peer||!store.isFriend(u.id,peer.id))return reply.code(403).send(errorBody('FORBIDDEN','recipient is not a friend'));const text=b?.text??b?.body;const photoId=b?.photo_id;if(!text&&!photoId)return reply.code(400).send(errorBody('BAD_REQUEST','text or photo_id required'));if(photoId&&!store.photos.has(photoId))return reply.code(404).send(errorBody('NOT_FOUND','photo not found'));const m={id:`m_${randomUUID()}`,from:u.id,to:peer.id,text,photoId,createdAt:new Date().toISOString()};store.messages.push(m);return reply.code(201).send(messageBody(m,store,u.id))})
-  app.post('/photos/:id/reactions', async (r,reply)=>{const u=auth(r,store),p=store.photos.get((r.params as any).id),type=(r.body as any)?.type;if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));if(!p)return reply.code(404).send(errorBody('NOT_FOUND','photo not found'));if(!['heart','thumbsup','wow'].includes(type))return reply.code(400).send(errorBody('BAD_REQUEST','invalid reaction'));store.reactions.set(`${p.id}:${type}:${u.id}`,new Set([u.id]));return reply.code(201).send({reactions:store.reactionsFor(p.id)})})
-  app.delete('/photos/:id/reactions/:type', async (r,reply)=>{const u=auth(r,store);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));store.reactions.delete(`${(r.params as any).id}:${(r.params as any).type}:${u.id}`);return reply.code(204).send()})
+  app.post('/photos/:id/reactions', async (r,reply)=>{const u=reactionActor(r,store),p=store.photos.get((r.params as any).id),type=(r.body as any)?.type;if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));if(!p)return reply.code(404).send(errorBody('NOT_FOUND','photo not found'));if(!['heart','thumbsup','wow'].includes(type))return reply.code(400).send(errorBody('BAD_REQUEST','invalid reaction'));store.reactions.set(`${p.id}:${type}:${u.id}`,new Set([u.id]));return reply.code(201).send({reactions:store.reactionsFor(p.id)})})
+  app.delete('/photos/:id/reactions/:type', async (r,reply)=>{const u=reactionActor(r,store);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));store.reactions.delete(`${(r.params as any).id}:${(r.params as any).type}:${u.id}`);return reply.code(204).send()})
+  // Display-frame firmware compat: aggregated taps arrive as POST /v1/reactions
+  // {photo_id, tap_count} with a device token; fold them into a heart reaction.
+  app.post('/reactions', async (r,reply)=>{const u=reactionActor(r,store);if(!u)return reply.code(401).send(errorBody('TOKEN_INVALID','token invalid'));const p=store.photos.get(String((r.body as any)?.photo_id??''));if(!p)return reply.code(404).send(errorBody('NOT_FOUND','photo not found'));store.reactions.set(`${p.id}:heart:${u.id}`,new Set([u.id]));return reply.code(201).send({reactions:store.reactionsFor(p.id)})})
 }
 
 function messageBody(message: any, store: DemoStore, userId: string) {
