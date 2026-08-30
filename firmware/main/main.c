@@ -19,6 +19,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 
 #include "bsp/m5stack_core_s3.h"
 #include "lvgl.h"
@@ -80,6 +81,21 @@ static void cam_on_wifi_ready(void)
     ui_start_photo_worker();
 }
 
+/* LVGL 刷新耗时统计 (排查预览帧率: render 之外的 71ms 去向) */
+static int64_t s_refr_t0;
+static uint32_t s_refr_us, s_refr_n;
+static void refr_start_cb(lv_event_t *e) { (void)e; s_refr_t0 = esp_timer_get_time(); }
+static void refr_ready_cb(lv_event_t *e)
+{
+    (void)e;
+    s_refr_us += (uint32_t)(esp_timer_get_time() - s_refr_t0);
+    if (++s_refr_n >= 32) {
+        PVC_EV("perf_refr avg_us=%lu n=%lu", (unsigned long)(s_refr_us / s_refr_n),
+               (unsigned long)s_refr_n);
+        s_refr_us = 0; s_refr_n = 0;
+    }
+}
+
 /* 联网状态 -> 状态栏短文案 */
 static void net_status_cb(pvc_net_state_t st, const char *detail)
 {
@@ -131,9 +147,11 @@ void app_main(void)
          * 1) BSP 默认 320x50 双缓冲 64KB 内部堆放不下 -> 复位循环;
          * 2) 改 PSRAM 缓冲 -> S3 的 SPI GDMA 读不了 PSRAM (EDMA 仅
          *    LCD_CAM/AES/SHA), flush 完成永不回调, LVGL 忙等喂狗超时;
-         * 3) 终解: 内部 DMA 320x12 双缓冲 (15KB), 条带多 8 个但每帧
-         *    SPI 总字节不变; 省下的内部堆给 WiFi+配网期 BLE */
-        .buffer_size = BSP_LCD_H_RES * 12,
+         * 3) 内部 DMA 双缓冲。条带行数权衡 (真机量化): refr 耗时与条带数
+         *    线性 (~3.5ms/条带固定管线开销, blit/memcpy 仅零头) ——
+         *    12 行=20 条带 71ms / 20 行=12 条带 ~43ms。20 行双缓冲 51KB
+         *    是 WiFi+BLE 内存编排下的上限, 再大配网期会 OOM */
+        .buffer_size = BSP_LCD_H_RES * 20,
         .double_buffer = 1,
         .flags = {
             .buff_dma = true,
@@ -162,6 +180,8 @@ void app_main(void)
         lv_display_set_theme(disp, th);
         bsp_display_unlock();
     }
+    lv_display_add_event_cb(disp, refr_start_cb, LV_EVENT_REFR_START, NULL);
+    lv_display_add_event_cb(disp, refr_ready_cb, LV_EVENT_REFR_READY, NULL);
     if (!quiet) bsp_display_backlight_on();
     ESP_LOGI(TAG, "CoreS3 display + LVGL ready");
     PVC_EV("heap_disp internal=%u",

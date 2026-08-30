@@ -93,3 +93,6 @@ CONFIG_LV_FS_MEMFS_LETTER=77
 # 全量字库 2.7MB: 默认 bitmap_index 仅 20 位 (字体上限 1MB), 偏移 >1MB 的
 # 字形全部截断乱码 (美/镜/颜 实证) -> 开大字体模式 (u32 偏移)
 CONFIG_LV_FONT_FMT_TXT_LARGE=y
+# LVGL 字符串函数用 newlib (优化汇编 memcpy): 内置 lv_memcpy 在 PSRAM
+# 条带 blit 上仅 ~2.3MB/s (真机 refr 71ms 的主因)
+CONFIG_LV_USE_CLIB_STRING=y

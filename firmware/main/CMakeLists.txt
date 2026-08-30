@@ -46,6 +46,9 @@ foreach(pvc_l3d f100 z30 a620 m532)
     endif()
 endforeach()
 
+# BSP 本地补丁 (LCD SPI 40->80MHz): managed_components 重拉后自动重打
+execute_process(COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/../tools/patch_bsp.sh)
+
 idf_component_register(SRCS "main.c" "app_camera.c" "hw2d.c" "hw2d_pie.S"
                             "pvc_font_cn16.c"
                             "ui_beauty_camera.c" "pvc_power.c" "pvc_clock.c"

@@ -241,7 +241,12 @@ static void render_overlays(const uint8_t *thumb_src)
             blend_circle(s_canvas_buf, 160, 26, 14, 200); /* 头顶装饰 */
         }
     }
+#ifdef PVC_PERF_EXP_QUARTER    /* 性能实验: 只失效顶部 1/4, 量 blit 线性度 */
+    lv_area_t qa = { 0, 0, UI_W - 1, UI_H / 4 - 1 };
+    lv_obj_invalidate_area(s_canvas, &qa);
+#else
     lv_obj_invalidate(s_canvas);
+#endif
     if (thumb_src) update_thumbs(thumb_src);
 }
 
@@ -250,12 +255,15 @@ static void preview_timer_cb(lv_timer_t *t)
     (void)t;
     const app_camera_frame_t *f;
     if (!s_canvas) return;
+    uint32_t tg = (uint32_t)esp_timer_get_time();
     f = app_camera_grab();
     if (!f) return;
 
     /* 性能监控: 统计每帧渲染总耗时 (验证 hw2d 硬件加速预算) */
     static uint32_t perf_frames = 0, perf_rend_us = 0, perf_last_ms = 0;
+    static uint32_t perf_grab_us = 0;
     uint32_t t0 = (uint32_t)esp_timer_get_time();
+    perf_grab_us += t0 - tg;
     bool thumb_due = s_thumb_dirty || ((++s_frame_cnt & 7u) == 0);
     if (f->width == UI_W && f->height == UI_H) {
         /* QVGA YUV422 直通: YUV 域滤镜 + RGB565 转换融合单遍 (显示边界) */
@@ -295,11 +303,14 @@ static void preview_timer_cb(lv_timer_t *t)
      * (perf_preview 供 analyze_log.py 判帧率红线: 目标 25, 低于阈值报警) */
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (now_ms - perf_last_ms >= 1000) {
-        PVC_EV("perf_preview fps=%lu render_avg_us=%lu cpu_pct=%lu heap=%lu",
+        PVC_EV("perf_preview fps=%lu render_avg_us=%lu grab_avg_us=%lu "
+               "cpu_pct=%lu heap=%lu",
                (unsigned long)perf_frames,
                (unsigned long)(perf_frames ? perf_rend_us / perf_frames : 0),
+               (unsigned long)(perf_frames ? perf_grab_us / perf_frames : 0),
                (unsigned long)(perf_rend_us / 10000), /* us/秒 -> % (1e6us=100%) */
                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+        perf_grab_us = 0;
         static uint32_t perf_sec = 0;
         if ((++perf_sec % 30) == 0) { /* 每 30s 输出一次各算子平均耗时 */
             hw2d_stats_dump();
